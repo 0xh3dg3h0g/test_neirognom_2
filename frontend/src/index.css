@@ -1,0 +1,107 @@
+:root {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #10243e;
+  background:
+    radial-gradient(circle at top, rgba(137, 200, 167, 0.35), transparent 38%),
+    linear-gradient(180deg, #f7fbf6 0%, #eef6ff 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.dashboard {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.dashboard__panel {
+  width: min(100%, 720px);
+  padding: 48px 40px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 24px 60px rgba(24, 49, 78, 0.15);
+  text-align: center;
+  backdrop-filter: blur(14px);
+}
+
+.dashboard__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #4e7a63;
+}
+
+.dashboard h1 {
+  margin: 14px 0 24px;
+  font-size: clamp(2rem, 5vw, 3.6rem);
+  line-height: 1;
+}
+
+.dashboard__temperature {
+  margin-bottom: 24px;
+  padding: 28px 24px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #effaf0 0%, #e8f1ff 100%);
+  font-size: clamp(1.6rem, 4vw, 2.8rem);
+  font-weight: 700;
+  color: #0f3b57;
+}
+
+.dashboard__button {
+  width: 100%;
+  border: 0;
+  border-radius: 18px;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, #1d6f42 0%, #2f8f73 100%);
+  color: #ffffff;
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+  box-shadow: 0 18px 30px rgba(29, 111, 66, 0.28);
+}
+
+.dashboard__button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 22px 38px rgba(29, 111, 66, 0.35);
+}
+
+.dashboard__button:active {
+  transform: translateY(0);
+}
+
+.dashboard__status {
+  margin: 18px 0 0;
+  font-size: 1rem;
+  color: #47627c;
+}
+
+@media (max-width: 640px) {
+  .dashboard__panel {
+    padding: 32px 20px;
+  }
+}
