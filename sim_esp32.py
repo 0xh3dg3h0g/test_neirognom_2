@@ -11,7 +11,6 @@ DEVICE_ID = "tray_1"
 COMMANDS_TOPIC = "farm/tray_1/cmd/#"
 CLIMATE_TOPIC = "farm/tray_1/sensors/climate"
 WATER_TOPIC = "farm/tray_1/sensors/water"
-SOIL_TOPIC = "farm/tray_1/sensors/soil"
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -33,31 +32,30 @@ client.on_message = on_message
 client.connect(BROKER_HOST, BROKER_PORT, 60)
 client.loop_start()
 
+iteration = 0
+
 while True:
+    iteration += 1
+    air_temp = round(random.uniform(22.0, 27.5), 1)
+
+    if iteration % 20 == 0:
+        air_temp = 33.0
+
     climate_payload = json.dumps(
         {
-            "air_temp": round(random.uniform(20.0, 25.0), 1),
-            "humidity": round(random.uniform(45.0, 65.0), 1),
-            "lux": random.randint(3000, 5000),
+            "air_temp": air_temp,
+            "humidity": round(random.uniform(42.0, 62.0), 1),
         }
     )
     water_payload = json.dumps(
         {
-            "water_temp": round(random.uniform(20.0, 22.0), 1),
-            "distance_cm": random.randint(40, 50),
-        }
-    )
-    soil_payload = json.dumps(
-        {
-            "moisture_percent": random.randint(55, 65),
+            "water_temp": round(random.uniform(17.0, 22.0), 1),
         }
     )
 
     client.publish(CLIMATE_TOPIC, climate_payload, retain=True)
     client.publish(WATER_TOPIC, water_payload, retain=True)
-    client.publish(SOIL_TOPIC, soil_payload, retain=True)
 
-    print(f"[СИМУЛЯТОР] Отправлены данные: {climate_payload}")
-    print(f"[СИМУЛЯТОР] Отправлены данные: {water_payload}")
-    print(f"[СИМУЛЯТОР] Отправлены данные: {soil_payload}")
-    time.sleep(5)
+    print(f"[СИМУЛЯТОР] Отправлены climate: {climate_payload}")
+    print(f"[СИМУЛЯТОР] Отправлены water: {water_payload}")
+    time.sleep(1)

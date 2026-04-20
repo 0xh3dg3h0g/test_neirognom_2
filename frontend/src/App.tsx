@@ -7,40 +7,84 @@ const MQTT_WS_URL = 'ws://31.56.208.196:9001'
 const API_BASE_URL = IS_LOCAL ? 'http://127.0.0.1:8000/api' : 'http://31.56.208.196:8000/api'
 const DEVICE_CONTROL_URL = `${API_BASE_URL}/device/control`
 const AI_DECIDE_URL = `${API_BASE_URL}/ai/decide`
+const AI_LOGS_URL = `${API_BASE_URL}/logs?limit=20`
+const CHAT_URL = `${API_BASE_URL}/chat`
 const SENSORS_TOPIC = 'farm/tray_1/sensors/#'
 
 type CommandState = 'ON' | 'OFF' | 'TIMER'
-type ActiveTab = 'dashboard-ai' | 'manual-control'
+type ActiveTab = 'monitoring-ai' | 'manual-control'
+type DeviceType = 'pump' | 'light' | 'fan'
 
 type ClimateData = {
   air_temp: number
   humidity: number
-  lux: number
 }
 
 type WaterData = {
   water_temp: number
-  distance_cm: number
 }
 
-type SoilData = {
-  moisture_percent: number
+type AiCommand = {
+  device_type: DeviceType
+  state: CommandState
+  duration?: number
+}
+
+type AiLog = {
+  id: number
+  timestamp: string
+  thought: string
+  commands_json: string
+}
+
+type ChatMessage = {
+  role: 'user' | 'assistant'
+  text: string
 }
 
 type AiDecisionResponse = {
   logs?: string[]
+  thought?: string
+  commands?: AiCommand[]
+}
+
+type ChatResponse = {
+  reply?: string
 }
 
 type DeviceCardProps = {
   title: string
-  deviceType: 'light' | 'fan' | 'pump' | 'valve'
+  deviceType: DeviceType
   timerValue: string
   onTimerChange: (value: string) => void
-  onCommand: (deviceType: DeviceCardProps['deviceType'], state: CommandState, duration?: number) => void
+  onCommand: (deviceType: DeviceType, state: CommandState, duration?: number) => void
 }
 
 function metricValue(value: number | null, unit: string) {
-  return value === null ? '-' : `${value} ${unit}`
+  return value === null ? '—' : `${value} ${unit}`
+}
+
+function parseCommands(commandsJson: string): AiCommand[] {
+  try {
+    const parsed = JSON.parse(commandsJson) as unknown
+    return Array.isArray(parsed) ? (parsed as AiCommand[]) : []
+  } catch {
+    return []
+  }
+}
+
+function formatCommand(command: AiCommand) {
+  const deviceTitle: Record<DeviceType, string> = {
+    pump: 'Насос',
+    light: 'Свет',
+    fan: 'Вентилятор',
+  }
+
+  if (command.state === 'TIMER' && typeof command.duration === 'number') {
+    return `${deviceTitle[command.device_type]}: TIMER ${command.duration} сек.`
+  }
+
+  return `${deviceTitle[command.device_type]}: ${command.state}`
 }
 
 function DeviceCard({
@@ -86,11 +130,11 @@ function DeviceCard({
         <input
           className="timer-control__input"
           type="number"
-          step="0.1"
-          min="0.1"
+          step="1"
+          min="1"
           value={timerValue}
           onChange={(event) => onTimerChange(event.target.value)}
-          placeholder="1.0"
+          placeholder="5"
         />
         <button className="timer-control__button" onClick={handleTimerStart}>
           Включить на время
@@ -101,39 +145,53 @@ function DeviceCard({
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard-ai')
+  const [activeTab, setActiveTab] = useState<ActiveTab>('monitoring-ai')
   const [climateData, setClimateData] = useState<ClimateData | null>(null)
   const [waterData, setWaterData] = useState<WaterData | null>(null)
-  const [soilData, setSoilData] = useState<SoilData | null>(null)
   const [requestState, setRequestState] = useState('Система готова к управлению')
-  const [aiLogs, setAiLogs] = useState<string[]>([
-    '[boot] AI terminal ready. Waiting for Neurognom.',
-  ])
+  const [aiLogs, setAiLogs] = useState<AiLog[]>([])
   const [isAiThinking, setIsAiThinking] = useState(false)
-  const [timerValues, setTimerValues] = useState({
-    light: '1.0',
-    fan: '1.0',
-    pump: '1.0',
-    valve: '1.0',
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      role: 'assistant',
+      text: 'Нейрогном на связи. Задайте вопрос по состоянию фермы или по моим предыдущим решениям.',
+    },
+  ])
+  const [chatInput, setChatInput] = useState('')
+  const [isChatLoading, setIsChatLoading] = useState(false)
+  const [timerValues, setTimerValues] = useState<Record<DeviceType, string>>({
+    light: '5',
+    fan: '5',
+    pump: '5',
   })
   const terminalRef = useRef<HTMLDivElement | null>(null)
+
+  const loadAiLogs = async () => {
+    try {
+      const response = await fetch(AI_LOGS_URL)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const data = (await response.json()) as AiLog[]
+      const normalizedLogs = Array.isArray(data) ? [...data].reverse() : []
+      setAiLogs(normalizedLogs)
+    } catch (error) {
+      console.error('Не удалось загрузить журнал Нейрогнома', error)
+    }
+  }
 
   useEffect(() => {
     const client = mqtt.connect(MQTT_WS_URL)
 
     const onMessageArrived = (topic: string, message: Buffer<ArrayBufferLike>) => {
       try {
-        const data = JSON.parse(message.toString()) as
-          | ClimateData
-          | WaterData
-          | SoilData
+        const data = JSON.parse(message.toString()) as ClimateData | WaterData
 
         if (topic.endsWith('/climate')) {
           setClimateData(data as ClimateData)
         } else if (topic.endsWith('/water')) {
           setWaterData(data as WaterData)
-        } else if (topic.endsWith('/soil')) {
-          setSoilData(data as SoilData)
         }
       } catch (error) {
         console.error('Не удалось обработать MQTT-сообщение', error)
@@ -162,7 +220,7 @@ function App() {
         return
       }
 
-      if (target.closest('button, input')) {
+      if (target.closest('button, input, textarea')) {
         return
       }
 
@@ -202,6 +260,18 @@ function App() {
   }, [])
 
   useEffect(() => {
+    void loadAiLogs()
+
+    const intervalId = window.setInterval(() => {
+      void loadAiLogs()
+    }, 15000)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!terminalRef.current) {
       return
     }
@@ -209,12 +279,8 @@ function App() {
     terminalRef.current.scrollTop = terminalRef.current.scrollHeight
   }, [aiLogs, isAiThinking])
 
-  const sendCommand = async (
-    device_type: DeviceCardProps['deviceType'],
-    state: CommandState,
-    duration?: number,
-  ) => {
-    setRequestState(`Отправка команды ${state} для ${device_type}`)
+  const sendCommand = async (deviceType: DeviceType, state: CommandState, duration?: number) => {
+    setRequestState(`Отправка команды ${state} для устройства ${deviceType}`)
 
     try {
       const response = await fetch(DEVICE_CONTROL_URL, {
@@ -224,7 +290,7 @@ function App() {
         },
         body: JSON.stringify({
           target_id: 'tray_1',
-          device_type,
+          device_type: deviceType,
           state,
           ...(state === 'TIMER' && duration !== undefined
             ? { duration: Number(duration) }
@@ -236,23 +302,15 @@ function App() {
         throw new Error(`HTTP ${response.status}`)
       }
 
-      setRequestState(`Команда ${state} для ${device_type} отправлена`)
+      setRequestState(`Команда ${state} для устройства ${deviceType} отправлена`)
     } catch (error) {
       console.error('Не удалось отправить команду устройству', error)
-      setRequestState(`Ошибка отправки команды ${state} для ${device_type}`)
+      setRequestState(`Ошибка отправки команды ${state} для устройства ${deviceType}`)
     }
   }
 
-  const setTimerValue = (deviceType: keyof typeof timerValues, value: string) => {
-    setTimerValues((current) => ({
-      ...current,
-      [deviceType]: value,
-    }))
-  }
-
-  const askNeurognom = async () => {
+  const requestAiDecision = async () => {
     setIsAiThinking(true)
-    setAiLogs((current) => [...current, `[${new Date().toLocaleTimeString()}] Asking Neurognom...`])
 
     try {
       const response = await fetch(AI_DECIDE_URL, {
@@ -267,28 +325,74 @@ function App() {
       }
 
       const data = (await response.json()) as AiDecisionResponse
-      const nextLogs =
-        Array.isArray(data.logs) && data.logs.length > 0
-          ? data.logs
-          : ['Neurognom returned an empty response.']
-
-      setAiLogs((current) => [...current, ...nextLogs])
+      const summary =
+        data.thought && data.thought.length > 0
+          ? `Нейрогном принял решение: ${data.thought}`
+          : 'Нейрогном выполнил запрос без пояснения.'
+      setRequestState(summary)
+      await loadAiLogs()
     } catch (error) {
+      console.error('Не удалось запросить решение Нейрогнома', error)
       const message = error instanceof Error ? error.message : String(error)
-      setAiLogs((current) => [...current, `Network error: ${message}`])
+      setRequestState(`Ошибка запроса решения Нейрогнома: ${message}`)
     } finally {
       setIsAiThinking(false)
     }
+  }
+
+  const askChatQuestion = async (message: string) => {
+    const trimmedMessage = message.trim()
+    if (!trimmedMessage) {
+      return
+    }
+
+    setChatMessages((current) => [...current, { role: 'user', text: trimmedMessage }])
+    setChatInput('')
+    setIsChatLoading(true)
+
+    try {
+      const response = await fetch(CHAT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: trimmedMessage }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const data = (await response.json()) as ChatResponse
+      const reply = data.reply?.trim() || 'Нейрогном не смог сформировать ответ.'
+      setChatMessages((current) => [...current, { role: 'assistant', text: reply }])
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error)
+      setChatMessages((current) => [
+        ...current,
+        { role: 'assistant', text: `Ошибка связи с Нейрогномом: ${messageText}` },
+      ])
+    } finally {
+      setIsChatLoading(false)
+    }
+  }
+
+  const setTimerValue = (deviceType: DeviceType, value: string) => {
+    setTimerValues((current) => ({
+      ...current,
+      [deviceType]: value,
+    }))
   }
 
   return (
     <main className="dashboard">
       <section className="dashboard__shell">
         <header className="dashboard__header">
-          <p className="dashboard__eyebrow">Neuroagronom Platform</p>
-          <h1>Панель управления сити-фермой</h1>
+          <p className="dashboard__eyebrow">Нейроагроном</p>
+          <h1>Панель управления городской фермой</h1>
           <p className="dashboard__subtitle">
-            Телеметрия и управление исполнительными устройствами в едином интерфейсе.
+            Мониторинг датчиков, журнал решений ИИ и ручное управление исполнительными
+            устройствами.
           </p>
         </header>
 
@@ -303,21 +407,21 @@ function App() {
             <button
               type="button"
               className="control-button"
-              onClick={() => setActiveTab('dashboard-ai')}
+              onClick={() => setActiveTab('monitoring-ai')}
               style={{
                 background:
-                  activeTab === 'dashboard-ai'
+                  activeTab === 'monitoring-ai'
                     ? 'linear-gradient(135deg, #1d7f52, #85c66b)'
                     : 'rgba(255, 255, 255, 0.08)',
                 color: '#f4ffe9',
                 border: '1px solid rgba(133, 198, 107, 0.35)',
                 boxShadow:
-                  activeTab === 'dashboard-ai'
+                  activeTab === 'monitoring-ai'
                     ? '0 12px 30px rgba(18, 78, 48, 0.35)'
                     : 'none',
               }}
             >
-              Dashboard &amp; AI
+              Мониторинг и ИИ
             </button>
             <button
               type="button"
@@ -336,75 +440,70 @@ function App() {
                     : 'none',
               }}
             >
-              Manual Control
+              Ручное управление
             </button>
           </div>
         </section>
 
-        {activeTab === 'dashboard-ai' ? (
+        {activeTab === 'monitoring-ai' ? (
           <>
             <section className="dashboard__section">
               <div className="section-heading">
-                <h2>Телеметрия</h2>
+                <h2>Показания датчиков</h2>
               </div>
 
               <div
-                className="telemetry-grid"
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
                   gap: '24px',
-                  alignItems: 'start',
                   width: '100%',
                 }}
               >
                 <article className="sensor-card">
-                  <h3>Климат</h3>
-                  <dl className="metric-list">
-                    <div className="metric-row">
-                      <dt>Воздух</dt>
-                      <dd>{metricValue(climateData?.air_temp ?? null, '°C')}</dd>
-                    </div>
-                    <div className="metric-row">
-                      <dt>Влажность</dt>
-                      <dd>{metricValue(climateData?.humidity ?? null, '%')}</dd>
-                    </div>
-                    <div className="metric-row">
-                      <dt>Свет</dt>
-                      <dd>{metricValue(climateData?.lux ?? null, 'Lux')}</dd>
-                    </div>
-                  </dl>
+                  <h3>Температура воздуха</h3>
+                  <p
+                    style={{
+                      margin: '12px 0 0',
+                      fontSize: '2rem',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {metricValue(climateData?.air_temp ?? null, '°C')}
+                  </p>
                 </article>
 
                 <article className="sensor-card">
-                  <h3>Резервуар</h3>
-                  <dl className="metric-list">
-                    <div className="metric-row">
-                      <dt>Температура воды</dt>
-                      <dd>{metricValue(waterData?.water_temp ?? null, '°C')}</dd>
-                    </div>
-                    <div className="metric-row">
-                      <dt>Расстояние</dt>
-                      <dd>{metricValue(waterData?.distance_cm ?? null, 'см')}</dd>
-                    </div>
-                  </dl>
+                  <h3>Влажность воздуха</h3>
+                  <p
+                    style={{
+                      margin: '12px 0 0',
+                      fontSize: '2rem',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {metricValue(climateData?.humidity ?? null, '%')}
+                  </p>
                 </article>
 
                 <article className="sensor-card">
-                  <h3>Субстрат</h3>
-                  <dl className="metric-list">
-                    <div className="metric-row">
-                      <dt>Влажность</dt>
-                      <dd>{metricValue(soilData?.moisture_percent ?? null, '%')}</dd>
-                    </div>
-                  </dl>
+                  <h3>Температура воды</h3>
+                  <p
+                    style={{
+                      margin: '12px 0 0',
+                      fontSize: '2rem',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {metricValue(waterData?.water_temp ?? null, '°C')}
+                  </p>
                 </article>
               </div>
             </section>
 
             <section className="dashboard__section">
               <div className="section-heading">
-                <h2>AI Terminal</h2>
+                <h2>Мысли Нейрогнома</h2>
               </div>
 
               <div
@@ -427,24 +526,24 @@ function App() {
                   }}
                 >
                   <div>
-                    <h3 style={{ margin: 0, color: '#d7ffc2' }}>Neurognom Console</h3>
+                    <h3 style={{ margin: 0, color: '#d7ffc2' }}>Терминал решений</h3>
                     <p style={{ margin: '6px 0 0', color: 'rgba(208, 255, 185, 0.72)' }}>
-                      Локальный агент анализирует последние 15 телеметрических записей.
+                      Последние решения Нейрогнома загружаются автоматически каждые 15 секунд.
                     </p>
                   </div>
 
                   <button
                     type="button"
                     className="control-button control-button--primary"
-                    onClick={askNeurognom}
+                    onClick={requestAiDecision}
                     disabled={isAiThinking}
                     style={{
-                      minWidth: '180px',
+                      minWidth: '230px',
                       opacity: isAiThinking ? 0.7 : 1,
                       cursor: isAiThinking ? 'wait' : 'pointer',
                     }}
                   >
-                    {isAiThinking ? 'Neurognom online...' : 'Ask Neurognom'}
+                    {isAiThinking ? 'Нейрогном думает...' : 'Запросить решение сейчас'}
                   </button>
                 </div>
 
@@ -452,7 +551,7 @@ function App() {
                   ref={terminalRef}
                   style={{
                     minHeight: '280px',
-                    maxHeight: '360px',
+                    maxHeight: '380px',
                     overflowY: 'auto',
                     padding: '18px',
                     borderRadius: '18px',
@@ -466,20 +565,37 @@ function App() {
                     color: '#9dffb0',
                   }}
                 >
-                  {aiLogs.map((log, index) => (
-                    <div
-                      key={`${index}-${log}`}
-                      style={{
-                        marginBottom: '10px',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        lineHeight: 1.55,
-                        textShadow: '0 0 10px rgba(100, 255, 150, 0.18)',
-                      }}
-                    >
-                      <span style={{ color: '#53d97d' }}>&gt;</span> {log}
+                  {aiLogs.length === 0 ? (
+                    <div style={{ color: 'rgba(157, 255, 176, 0.72)' }}>
+                      &gt; Журнал решений пока пуст.
                     </div>
-                  ))}
+                  ) : null}
+
+                  {aiLogs.map((log) => {
+                    const commands = parseCommands(log.commands_json)
+                    return (
+                      <div
+                        key={log.id}
+                        style={{
+                          marginBottom: '16px',
+                          paddingBottom: '16px',
+                          borderBottom: '1px solid rgba(120, 255, 170, 0.12)',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          lineHeight: 1.55,
+                        }}
+                      >
+                        <div style={{ color: '#53d97d' }}>&gt; [{log.timestamp}]</div>
+                        <div>Мысль: {log.thought || 'Нет пояснения.'}</div>
+                        <div>
+                          Команды:{' '}
+                          {commands.length > 0
+                            ? commands.map((command) => formatCommand(command)).join(' | ')
+                            : 'действия не требуются'}
+                        </div>
+                      </div>
+                    )
+                  })}
 
                   {isAiThinking ? (
                     <div
@@ -501,9 +617,122 @@ function App() {
                           flexShrink: 0,
                         }}
                       />
-                      <span>Neurognom is thinking...</span>
+                      <span>Нейрогном анализирует данные...</span>
                     </div>
                   ) : null}
+                </div>
+              </div>
+            </section>
+
+            <section className="dashboard__section">
+              <div className="section-heading">
+                <h2>Спросить Нейрогнома</h2>
+              </div>
+
+              <div
+                className="sensor-card"
+                style={{
+                  display: 'grid',
+                  gap: '18px',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '10px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  {['Как дела на ферме?', 'Зачем ты включил вентилятор?'].map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      className="control-button control-button--secondary"
+                      onClick={() => void askChatQuestion(example)}
+                      disabled={isChatLoading}
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '12px',
+                    maxHeight: '320px',
+                    overflowY: 'auto',
+                    paddingRight: '4px',
+                  }}
+                >
+                  {chatMessages.map((message, index) => (
+                    <div
+                      key={`${message.role}-${index}`}
+                      style={{
+                        justifySelf: message.role === 'user' ? 'end' : 'start',
+                        maxWidth: '85%',
+                        padding: '14px 16px',
+                        borderRadius: '18px',
+                        background:
+                          message.role === 'user'
+                            ? 'linear-gradient(135deg, rgba(33, 130, 79, 0.18), rgba(46, 186, 109, 0.22))'
+                            : 'rgba(255, 255, 255, 0.06)',
+                        border:
+                          message.role === 'user'
+                            ? '1px solid rgba(133, 198, 107, 0.24)'
+                            : '1px solid rgba(255, 255, 255, 0.08)',
+                      }}
+                    >
+                      <strong
+                        style={{
+                          display: 'block',
+                          marginBottom: '6px',
+                          color: message.role === 'user' ? '#dfffd0' : '#f4ffe9',
+                        }}
+                      >
+                        {message.role === 'user' ? 'Вы' : 'Нейрогном'}
+                      </strong>
+                      <span>{message.text}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    gap: '12px',
+                    alignItems: 'end',
+                  }}
+                >
+                  <textarea
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    placeholder="Например: Почему ты ничего не включил?"
+                    rows={3}
+                    style={{
+                      width: '100%',
+                      resize: 'vertical',
+                      borderRadius: '18px',
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      color: 'inherit',
+                      padding: '14px 16px',
+                      font: 'inherit',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="control-button control-button--primary"
+                    onClick={() => void askChatQuestion(chatInput)}
+                    disabled={isChatLoading}
+                    style={{
+                      minWidth: '130px',
+                      minHeight: '52px',
+                    }}
+                  >
+                    {isChatLoading ? 'Отправка...' : 'Спросить'}
+                  </button>
                 </div>
               </div>
             </section>
@@ -511,7 +740,7 @@ function App() {
         ) : (
           <section className="dashboard__section">
             <div className="section-heading">
-              <h2>Управление</h2>
+              <h2>Ручное управление</h2>
             </div>
 
             <div
@@ -525,20 +754,6 @@ function App() {
               }}
             >
               <DeviceCard
-                title="Фитосвет"
-                deviceType="light"
-                timerValue={timerValues.light}
-                onTimerChange={(value) => setTimerValue('light', value)}
-                onCommand={sendCommand}
-              />
-              <DeviceCard
-                title="Вентиляция"
-                deviceType="fan"
-                timerValue={timerValues.fan}
-                onTimerChange={(value) => setTimerValue('fan', value)}
-                onCommand={sendCommand}
-              />
-              <DeviceCard
                 title="Насос"
                 deviceType="pump"
                 timerValue={timerValues.pump}
@@ -546,10 +761,17 @@ function App() {
                 onCommand={sendCommand}
               />
               <DeviceCard
-                title="Клапан"
-                deviceType="valve"
-                timerValue={timerValues.valve}
-                onTimerChange={(value) => setTimerValue('valve', value)}
+                title="Свет"
+                deviceType="light"
+                timerValue={timerValues.light}
+                onTimerChange={(value) => setTimerValue('light', value)}
+                onCommand={sendCommand}
+              />
+              <DeviceCard
+                title="Вентилятор"
+                deviceType="fan"
+                timerValue={timerValues.fan}
+                onTimerChange={(value) => setTimerValue('fan', value)}
                 onCommand={sendCommand}
               />
             </div>
