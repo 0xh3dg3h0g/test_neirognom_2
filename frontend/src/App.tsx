@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import mqtt, { type MqttClient } from 'mqtt'
 
 const IS_LOCAL =
@@ -387,6 +387,15 @@ function App() {
     }))
   }
 
+  const handleChatInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey) {
+      return
+    }
+
+    event.preventDefault()
+    void askChatQuestion(chatInput)
+  }
+
   const publishSimulationMode = (mode: 'HEAT' | 'COLD' | 'NORMAL') => {
     const client = mqttClientRef.current
 
@@ -660,26 +669,6 @@ function App() {
               >
                 <div
                   style={{
-                    display: 'flex',
-                    gap: '10px',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  {['Как дела на ферме?', 'Зачем ты включил вентилятор?'].map((example) => (
-                    <button
-                      key={example}
-                      type="button"
-                      className="control-button control-button--secondary"
-                      onClick={() => void askChatQuestion(example)}
-                      disabled={isChatLoading}
-                    >
-                      {example}
-                    </button>
-                  ))}
-                </div>
-
-                <div
-                  style={{
                     display: 'grid',
                     gap: '12px',
                     maxHeight: '320px',
@@ -724,17 +713,16 @@ function App() {
                     display: 'grid',
                     gridTemplateColumns: 'minmax(0, 1fr) auto',
                     gap: '12px',
-                    alignItems: 'end',
+                    alignItems: 'center',
                   }}
                 >
-                  <textarea
+                  <input
                     value={chatInput}
                     onChange={(event) => setChatInput(event.target.value)}
+                    onKeyDown={handleChatInputKeyDown}
                     placeholder="Например: Почему ты ничего не включил?"
-                    rows={3}
                     style={{
                       width: '100%',
-                      resize: 'vertical',
                       borderRadius: '18px',
                       border: '1px solid rgba(255, 255, 255, 0.12)',
                       background: 'rgba(255, 255, 255, 0.05)',
@@ -748,12 +736,17 @@ function App() {
                     className="control-button control-button--primary"
                     onClick={() => void askChatQuestion(chatInput)}
                     disabled={isChatLoading}
+                    aria-label="Отправить сообщение"
                     style={{
-                      minWidth: '130px',
+                      minWidth: '52px',
                       minHeight: '52px',
+                      padding: 0,
+                      display: 'grid',
+                      placeItems: 'center',
+                      fontSize: '1.1rem',
                     }}
                   >
-                    {isChatLoading ? 'Отправка...' : 'Спросить'}
+                    {isChatLoading ? '…' : '➜'}
                   </button>
                 </div>
               </div>

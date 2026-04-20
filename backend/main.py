@@ -179,7 +179,12 @@ def strip_markdown_backticks(raw_text: str) -> str:
     return cleaned.replace("```", "").strip()
 
 
-def call_ollama(prompt: str, *, format_json: bool) -> str:
+def call_ollama(
+    prompt: str,
+    *,
+    format_json: bool,
+    options: dict[str, Any] | None = None,
+) -> str:
     request_payload: dict[str, Any] = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
@@ -187,6 +192,8 @@ def call_ollama(prompt: str, *, format_json: bool) -> str:
     }
     if format_json:
         request_payload["format"] = "json"
+    if options:
+        request_payload["options"] = options
 
     request = urllib.request.Request(
         OLLAMA_URL,
@@ -228,25 +235,58 @@ def build_decision_prompt(records: list[dict[str, Any]]) -> str:
     )
 
 
-def build_chat_prompt(
-    message: str,
-    telemetry_records: list[dict[str, Any]],
-    ai_log_records: list[dict[str, Any]],
-) -> str:
-    telemetry_json = json.dumps(telemetry_records, ensure_ascii=False, indent=2)
-    ai_logs_json = json.dumps(ai_log_records, ensure_ascii=False, indent=2)
-    return (
-        "Ты — Нейроагроном, умный ИИ-агроном городской фермы. "
-        "Отвечай на вопросы пользователя только на основе реальных данных с датчиков "
-        "и своих предыдущих решений. Не выдумывай. Если данных нет — скажи об этом.\n\n"
-        "Последние 5 записей телеметрии:\n"
-        f"{telemetry_json}\n\n"
-        "Последние 3 записи журнала решений ИИ:\n"
-        f"{ai_logs_json}\n\n"
-        "Вопрос пользователя:\n"
-        f"{message}\n\n"
-        "Ответь кратко, понятно и только на русском языке."
+def get_latest_data_snapshot() -> dict[str, Any]:
+    latest_snapshot: dict[str, Any] = {
+        "Температура": None,
+        "Влажность": None,
+        "Темп. воды": None,
+    }
+
+    for record in reversed(get_recent_telemetry(10)):
+        payload = record.get("parsed_payload")
+        if not isinstance(payload, dict):
+            continue
+
+        topic = str(record.get("topic", ""))
+        if topic.endswith("/climate"):
+            if latest_snapshot["Температура"] is None:
+                latest_snapshot["Температура"] = payload.get("air_temp")
+            if latest_snapshot["Влажность"] is None:
+                latest_snapshot["Влажность"] = payload.get("humidity")
+        elif topic.endswith("/water"):
+            if latest_snapshot["Темп. воды"] is None:
+                latest_snapshot["Темп. воды"] = payload.get("water_temp")
+
+    return latest_snapshot
+
+
+def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None) -> str:
+    latest_data = json.dumps(get_latest_data_snapshot(), ensure_ascii=False)
+    system_prompt = (
+        "Ты — Нейрогном, суровый и точный ИИ-контроллер демонстрационного макета "
+        "сити-фермы. У тебя есть только 3 датчика (Температура, Влажность, Темп. воды) "
+        "и 3 реле (Вентилятор, Насос, Свет). Отвечай на вопросы пользователя КРАТКО "
+        "(1-2 предложения), строго по делу. Не выдумывай функций, которых у тебя нет. "
+        "Не давай абстрактных советов по агрономии, если тебя не просят. "
+        f"Опирайся только на текущие данные телеметрии: {latest_data}"
     )
+
+    prompt_parts = [system_prompt]
+
+    if history:
+        history_lines: list[str] = []
+        for item in history:
+            role = item.get("role", "").strip().lower()
+            text = item.get("text", "").strip()
+            if not text:
+                continue
+            speaker = "Пользователь" if role == "user" else "Нейрогном"
+            history_lines.append(f"{speaker}: {text}")
+        if history_lines:
+            prompt_parts.append("История диалога:\n" + "\n".join(history_lines))
+
+    prompt_parts.append(f"Пользователь: {message.strip()}\nНейрогном:")
+    return "\n\n".join(prompt_parts)
 
 
 def normalize_commands(raw_commands: Any) -> tuple[list[dict[str, Any]], list[str]]:
@@ -365,6 +405,7 @@ class DeviceControlRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    history: list[dict[str, str]] | None = None
 
 
 @app.get("/")
@@ -443,13 +484,16 @@ def get_logs(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any
 
 
 @app.post("/api/chat")
+@app.post("/api/ai/chat")
 def chat_with_ai(request: ChatRequest) -> dict[str, str]:
-    telemetry_records = get_recent_telemetry(5)
-    ai_log_records = get_recent_ai_logs(3)
-    prompt = build_chat_prompt(request.message, telemetry_records, ai_log_records)
+    prompt = build_chat_prompt(request.message, request.history)
 
     try:
-        reply = call_ollama(prompt, format_json=False)
+        reply = call_ollama(
+            prompt,
+            format_json=False,
+            options={"temperature": 0.1},
+        )
     except Exception as exc:
         return {"reply": f"Не удалось получить ответ от Ollama: {exc}"}
 
