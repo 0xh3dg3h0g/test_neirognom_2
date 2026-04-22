@@ -399,7 +399,10 @@ export default function App() {
         stages={ledStages}
         activeIndex={activeLedStage}
         isPlaying={isLedPlaying}
-        onPlay={() => setIsLedPlaying(true)}
+        onPlay={() => {
+          setActiveLedStage(0);
+          setIsLedPlaying(true);
+        }}
       />
     </div>
   )
@@ -463,7 +466,10 @@ export default function App() {
         stages={ledStages}
         activeIndex={activeLedStage}
         isPlaying={isLedPlaying}
-        onPlay={() => setIsLedPlaying(true)}
+        onPlay={() => {
+          setActiveLedStage(0);
+          setIsLedPlaying(true);
+        }}
         compact
       />
     </div>
