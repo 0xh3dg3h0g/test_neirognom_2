@@ -11,6 +11,95 @@ const AI_LOGS_URL = `${API_BASE_URL}/logs?limit=20`
 const CHAT_URL = `${API_BASE_URL}/chat`
 const SENSORS_TOPIC = 'farm/tray_1/sensors/#'
 
+const TEXT = {
+  emptyValue: '\u2014',
+  appName: '\u041d\u0435\u0439\u0440\u043e\u0430\u0433\u0440\u043e\u043d\u043e\u043c',
+  dashboardTitle: '\u041f\u0430\u043d\u0435\u043b\u044c \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f \u0433\u043e\u0440\u043e\u0434\u0441\u043a\u043e\u0439 \u0444\u0435\u0440\u043c\u043e\u0439',
+  dashboardSubtitle:
+    '\u041c\u043e\u043d\u0438\u0442\u043e\u0440\u0438\u043d\u0433 \u0434\u0430\u0442\u0447\u0438\u043a\u043e\u0432, \u0436\u0443\u0440\u043d\u0430\u043b \u0440\u0435\u0448\u0435\u043d\u0438\u0439 \u0418\u0418 \u0438 \u0440\u0443\u0447\u043d\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u0438\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u043c\u0438 \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u0430\u043c\u0438.',
+  systemReady: '\u0421\u0438\u0441\u0442\u0435\u043c\u0430 \u0433\u043e\u0442\u043e\u0432\u0430 \u043a \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044e',
+  chatIntro:
+    '\u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u0417\u0430\u0434\u0430\u0439\u0442\u0435 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u044e \u0444\u0435\u0440\u043c\u044b \u0438\u043b\u0438 \u043f\u043e \u043c\u043e\u0438\u043c \u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u043c \u0440\u0435\u0448\u0435\u043d\u0438\u044f\u043c.',
+  tabs: {
+    monitoringAi: '\u041c\u043e\u043d\u0438\u0442\u043e\u0440\u0438\u043d\u0433 \u0438 \u0418\u0418',
+    manualControl: '\u0420\u0443\u0447\u043d\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435',
+  },
+  sections: {
+    sensors: '\u041f\u043e\u043a\u0430\u0437\u0430\u043d\u0438\u044f \u0434\u0430\u0442\u0447\u0438\u043a\u043e\u0432',
+    thoughts: '\u041c\u044b\u0441\u043b\u0438 \u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c\u0430',
+    ask: '\u0421\u043f\u0440\u043e\u0441\u0438\u0442\u044c \u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c\u0430',
+    manual: '\u0420\u0443\u0447\u043d\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435',
+    simulation: '\u041e\u0442\u043b\u0430\u0434\u043a\u0430 \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u0438',
+  },
+  sensorLabels: {
+    airTemp: '\u0422\u0435\u043c\u043f\u0435\u0440\u0430\u0442\u0443\u0440\u0430 \u0432\u043e\u0437\u0434\u0443\u0445\u0430',
+    humidity: '\u0412\u043b\u0430\u0436\u043d\u043e\u0441\u0442\u044c \u0432\u043e\u0437\u0434\u0443\u0445\u0430',
+    waterTemp: '\u0422\u0435\u043c\u043f\u0435\u0440\u0430\u0442\u0443\u0440\u0430 \u0432\u043e\u0434\u044b',
+  },
+  deviceTitles: {
+    pump: '\u041d\u0430\u0441\u043e\u0441',
+    light: '\u0421\u0432\u0435\u0442',
+    fan: '\u0412\u0435\u043d\u0442\u0438\u043b\u044f\u0442\u043e\u0440',
+  },
+  deviceActions: {
+    on: '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c',
+    off: '\u0412\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c',
+    timed: '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043d\u0430 \u0432\u0440\u0435\u043c\u044f',
+  },
+  terminal: {
+    title: '\u0422\u0435\u0440\u043c\u0438\u043d\u0430\u043b \u0440\u0435\u0448\u0435\u043d\u0438\u0439',
+    subtitle:
+      '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u0440\u0435\u0448\u0435\u043d\u0438\u044f \u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c\u0430 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u044e\u0442\u0441\u044f \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438 \u043a\u0430\u0436\u0434\u044b\u0435 15 \u0441\u0435\u043a\u0443\u043d\u0434.',
+    askNow: '\u0417\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u044c \u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u0441\u0435\u0439\u0447\u0430\u0441',
+    thinking: '\u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c \u0434\u0443\u043c\u0430\u0435\u0442...',
+    empty: '> \u0416\u0443\u0440\u043d\u0430\u043b \u0440\u0435\u0448\u0435\u043d\u0438\u0439 \u043f\u043e\u043a\u0430 \u043f\u0443\u0441\u0442.',
+    thoughtPrefix: '\u041c\u044b\u0441\u043b\u044c',
+    noThought: '\u041d\u0435\u0442 \u043f\u043e\u044f\u0441\u043d\u0435\u043d\u0438\u044f.',
+    commands: '\u041a\u043e\u043c\u0430\u043d\u0434\u044b',
+    noActions: '\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044f \u043d\u0435 \u0442\u0440\u0435\u0431\u0443\u044e\u0442\u0441\u044f',
+    analyzing: '\u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c \u0430\u043d\u0430\u043b\u0438\u0437\u0438\u0440\u0443\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0435...',
+  },
+  chat: {
+    askPlaceholder:
+      '\u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: \u041f\u043e\u0447\u0435\u043c\u0443 \u0442\u044b \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0432\u043a\u043b\u044e\u0447\u0438\u043b?',
+    you: '\u0412\u044b',
+    assistant: '\u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c',
+    sendAria: '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    sendIcon: '\u2192',
+  },
+  simulation: {
+    description:
+      '\u041f\u0430\u043d\u0435\u043b\u044c \u0434\u043b\u044f \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u0442\u0435\u0441\u0442\u043e\u0432\u044b\u0445 \u0440\u0435\u0436\u0438\u043c\u043e\u0432 ESP32-\u0441\u0438\u043c\u0443\u043b\u044f\u0442\u043e\u0440\u0430 \u0447\u0435\u0440\u0435\u0437 MQTT.',
+    heat: '\u0418\u043c\u0438\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0436\u0430\u0440\u0443',
+    cold: '\u0418\u043c\u0438\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0445\u043e\u043b\u043e\u0434',
+    normal: '\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 \u043d\u043e\u0440\u043c\u0443',
+  },
+  statuses: {
+    loadingLogs: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0436\u0443\u0440\u043d\u0430\u043b \u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c\u0430',
+    mqttMessage: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c MQTT-\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435',
+    mqttError: '\u041e\u0448\u0438\u0431\u043a\u0430 MQTT-\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f',
+    sendCommand: '\u041e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 \u043a\u043e\u043c\u0430\u043d\u0434\u044b',
+    sentCommand: '\u041a\u043e\u043c\u0430\u043d\u0434\u0430',
+    commandError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0438 \u043a\u043e\u043c\u0430\u043d\u0434\u044b',
+    deviceSuffix: '\u0434\u043b\u044f \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u0430',
+    sendCommandLog: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043a\u043e\u043c\u0430\u043d\u0434\u0443 \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u0443',
+    aiDecisionLog: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u044c \u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c\u0430',
+    aiDecisionPrefix: '\u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c \u043f\u0440\u0438\u043d\u044f\u043b \u0440\u0435\u0448\u0435\u043d\u0438\u0435',
+    aiDecisionFallback: '\u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u043b \u0437\u0430\u043f\u0440\u043e\u0441 \u0431\u0435\u0437 \u043f\u043e\u044f\u0441\u043d\u0435\u043d\u0438\u044f.',
+    aiDecisionError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0440\u043e\u0441\u0430 \u0440\u0435\u0448\u0435\u043d\u0438\u044f \u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c\u0430',
+    chatFallback: '\u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c \u043d\u0435 \u0441\u043c\u043e\u0433 \u0441\u0444\u043e\u0440\u043c\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043e\u0442\u0432\u0435\u0442.',
+    chatError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u0432\u044f\u0437\u0438 \u0441 \u041d\u0435\u0439\u0440\u043e\u0433\u043d\u043e\u043c\u043e\u043c',
+    simulationUnavailable:
+      '\u041e\u0448\u0438\u0431\u043a\u0430: MQTT-\u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u0434\u043b\u044f \u043e\u0442\u043b\u0430\u0434\u043a\u0438 \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u0438',
+    simulationSent: '\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u043e\u0442\u043b\u0430\u0434\u043a\u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0430',
+    modeLabels: {
+      HEAT: '\u0436\u0430\u0440\u0430',
+      COLD: '\u0445\u043e\u043b\u043e\u0434',
+      NORMAL: '\u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c',
+    },
+  },
+} as const
+
 type CommandState = 'ON' | 'OFF' | 'TIMER'
 type ActiveTab = 'monitoring-ai' | 'manual-control'
 type DeviceType = 'pump' | 'light' | 'fan'
@@ -61,7 +150,7 @@ type DeviceCardProps = {
 }
 
 function metricValue(value: number | null, unit: string) {
-  return value === null ? '—' : `${value} ${unit}`
+  return value === null ? TEXT.emptyValue : `${value} ${unit}`
 }
 
 function parseCommands(commandsJson: string): AiCommand[] {
@@ -75,13 +164,13 @@ function parseCommands(commandsJson: string): AiCommand[] {
 
 function formatCommand(command: AiCommand) {
   const deviceTitle: Record<DeviceType, string> = {
-    pump: 'Насос',
-    light: 'Свет',
-    fan: 'Вентилятор',
+    pump: TEXT.deviceTitles.pump,
+    light: TEXT.deviceTitles.light,
+    fan: TEXT.deviceTitles.fan,
   }
 
   if (command.state === 'TIMER' && typeof command.duration === 'number') {
-    return `${deviceTitle[command.device_type]}: TIMER ${command.duration} сек.`
+    return `${deviceTitle[command.device_type]}: TIMER ${command.duration} \u0441\u0435\u043a.`
   }
 
   return `${deviceTitle[command.device_type]}: ${command.state}`
@@ -116,13 +205,13 @@ function DeviceCard({
           className="control-button control-button--primary"
           onClick={() => onCommand(deviceType, 'ON')}
         >
-          Включить
+          {TEXT.deviceActions.on}
         </button>
         <button
           className="control-button control-button--secondary"
           onClick={() => onCommand(deviceType, 'OFF')}
         >
-          Выключить
+          {TEXT.deviceActions.off}
         </button>
       </div>
 
@@ -137,7 +226,7 @@ function DeviceCard({
           placeholder="5"
         />
         <button className="timer-control__button" onClick={handleTimerStart}>
-          Включить на время
+          {TEXT.deviceActions.timed}
         </button>
       </div>
     </article>
@@ -148,13 +237,13 @@ function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('monitoring-ai')
   const [climateData, setClimateData] = useState<ClimateData | null>(null)
   const [waterData, setWaterData] = useState<WaterData | null>(null)
-  const [requestState, setRequestState] = useState('Система готова к управлению')
+  const [requestState, setRequestState] = useState<string>(TEXT.systemReady)
   const [aiLogs, setAiLogs] = useState<AiLog[]>([])
   const [isAiThinking, setIsAiThinking] = useState(false)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
-      text: 'Нейрогном на связи. Задайте вопрос по состоянию фермы или по моим предыдущим решениям.',
+      text: TEXT.chatIntro,
     },
   ])
   const [chatInput, setChatInput] = useState('')
@@ -179,7 +268,7 @@ function App() {
       const normalizedLogs = Array.isArray(data) ? [...data].reverse() : []
       setAiLogs(normalizedLogs)
     } catch (error) {
-      console.error('Не удалось загрузить журнал Нейрогнома', error)
+      console.error(TEXT.statuses.loadingLogs, error)
     }
   }
 
@@ -197,7 +286,7 @@ function App() {
           setWaterData(data as WaterData)
         }
       } catch (error) {
-        console.error('Не удалось обработать MQTT-сообщение', error)
+        console.error(TEXT.statuses.mqttMessage, error)
       }
     }
 
@@ -207,7 +296,7 @@ function App() {
 
     client.on('message', onMessageArrived)
     client.on('error', (error) => {
-      console.error('Ошибка MQTT-подключения', error)
+      console.error(TEXT.statuses.mqttError, error)
     })
 
     return () => {
@@ -288,7 +377,7 @@ function App() {
   }, [chatMessages])
 
   const sendCommand = async (deviceType: DeviceType, state: CommandState, duration?: number) => {
-    setRequestState(`Отправка команды ${state} для устройства ${deviceType}`)
+    setRequestState(`${TEXT.statuses.sendCommand} ${state} ${TEXT.statuses.deviceSuffix} ${deviceType}`)
 
     try {
       const response = await fetch(DEVICE_CONTROL_URL, {
@@ -310,10 +399,10 @@ function App() {
         throw new Error(`HTTP ${response.status}`)
       }
 
-      setRequestState(`Команда ${state} для устройства ${deviceType} отправлена`)
+      setRequestState(`${TEXT.statuses.sentCommand} ${state} ${TEXT.statuses.deviceSuffix} ${deviceType} \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0430`)
     } catch (error) {
-      console.error('Не удалось отправить команду устройству', error)
-      setRequestState(`Ошибка отправки команды ${state} для устройства ${deviceType}`)
+      console.error(TEXT.statuses.sendCommandLog, error)
+      setRequestState(`${TEXT.statuses.commandError} ${state} ${TEXT.statuses.deviceSuffix} ${deviceType}`)
     }
   }
 
@@ -335,14 +424,14 @@ function App() {
       const data = (await response.json()) as AiDecisionResponse
       const summary =
         data.thought && data.thought.length > 0
-          ? `Нейрогном принял решение: ${data.thought}`
-          : 'Нейрогном выполнил запрос без пояснения.'
+          ? `${TEXT.statuses.aiDecisionPrefix}: ${data.thought}`
+          : TEXT.statuses.aiDecisionFallback
       setRequestState(summary)
       await loadAiLogs()
     } catch (error) {
-      console.error('Не удалось запросить решение Нейрогнома', error)
+      console.error(TEXT.statuses.aiDecisionLog, error)
       const message = error instanceof Error ? error.message : String(error)
-      setRequestState(`Ошибка запроса решения Нейрогнома: ${message}`)
+      setRequestState(`${TEXT.statuses.aiDecisionError}: ${message}`)
     } finally {
       setIsAiThinking(false)
     }
@@ -372,13 +461,13 @@ function App() {
       }
 
       const data = (await response.json()) as ChatResponse
-      const reply = data.reply?.trim() || 'Нейрогном не смог сформировать ответ.'
+      const reply = data.reply?.trim() || TEXT.statuses.chatFallback
       setChatMessages((current) => [...current, { role: 'assistant', text: reply }])
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error)
       setChatMessages((current) => [
         ...current,
-        { role: 'assistant', text: `Ошибка связи с Нейрогномом: ${messageText}` },
+        { role: 'assistant', text: `${TEXT.statuses.chatError}: ${messageText}` },
       ])
     } finally {
       setIsChatLoading(false)
@@ -405,78 +494,43 @@ function App() {
     const client = mqttClientRef.current
 
     if (!client || !client.connected) {
-      setRequestState('Ошибка: MQTT-соединение недоступно для отладки симуляции')
+      setRequestState(TEXT.statuses.simulationUnavailable)
       return
     }
 
     client.publish('farm/sim/control', mode)
 
-    const modeLabel: Record<typeof mode, string> = {
-      HEAT: 'жара',
-      COLD: 'холод',
-      NORMAL: 'нормальный режим',
-    }
-
-    setRequestState(`Команда отладки отправлена: ${modeLabel[mode]}`)
+    setRequestState(`${TEXT.statuses.simulationSent}: ${TEXT.statuses.modeLabels[mode]}`)
   }
 
   return (
     <main className="dashboard">
       <section className="dashboard__shell">
         <header className="dashboard__header">
-          <p className="dashboard__eyebrow">Нейроагроном</p>
-          <h1>Панель управления городской фермой</h1>
-          <p className="dashboard__subtitle">
-            Мониторинг датчиков, журнал решений ИИ и ручное управление исполнительными
-            устройствами.
-          </p>
+          <p className="dashboard__eyebrow">{TEXT.appName}</p>
+          <h1>{TEXT.dashboardTitle}</h1>
+          <p className="dashboard__subtitle">{TEXT.dashboardSubtitle}</p>
         </header>
 
-        <section className="dashboard__section" style={{ paddingBottom: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              gap: '12px',
-              flexWrap: 'wrap',
-            }}
-          >
+        <section className="dashboard__section dashboard__section--compact">
+          <div className="dashboard__tabs">
             <button
               type="button"
-              className="control-button"
+              className={`control-button control-button--tab${
+                activeTab === 'monitoring-ai' ? ' control-button--tab-active' : ''
+              }`}
               onClick={() => setActiveTab('monitoring-ai')}
-              style={{
-                background:
-                  activeTab === 'monitoring-ai'
-                    ? 'linear-gradient(135deg, #1d7f52, #85c66b)'
-                    : 'rgba(255, 255, 255, 0.08)',
-                color: '#f4ffe9',
-                border: '1px solid rgba(133, 198, 107, 0.35)',
-                boxShadow:
-                  activeTab === 'monitoring-ai'
-                    ? '0 12px 30px rgba(18, 78, 48, 0.35)'
-                    : 'none',
-              }}
             >
-              Мониторинг и ИИ
+              {TEXT.tabs.monitoringAi}
             </button>
             <button
               type="button"
-              className="control-button"
+              className={`control-button control-button--tab${
+                activeTab === 'manual-control' ? ' control-button--tab-active' : ''
+              }`}
               onClick={() => setActiveTab('manual-control')}
-              style={{
-                background:
-                  activeTab === 'manual-control'
-                    ? 'linear-gradient(135deg, #1d7f52, #85c66b)'
-                    : 'rgba(255, 255, 255, 0.08)',
-                color: '#f4ffe9',
-                border: '1px solid rgba(133, 198, 107, 0.35)',
-                boxShadow:
-                  activeTab === 'manual-control'
-                    ? '0 12px 30px rgba(18, 78, 48, 0.35)'
-                    : 'none',
-              }}
             >
-              Ручное управление
+              {TEXT.tabs.manualControl}
             </button>
           </div>
         </section>
@@ -485,175 +539,76 @@ function App() {
           <>
             <section className="dashboard__section">
               <div className="section-heading">
-                <h2>Показания датчиков</h2>
+                <h2>{TEXT.sections.sensors}</h2>
               </div>
 
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                  gap: '24px',
-                  width: '100%',
-                }}
-              >
+              <div className="telemetry-grid telemetry-grid--metrics">
                 <article className="sensor-card">
-                  <h3>Температура воздуха</h3>
-                  <p
-                    style={{
-                      margin: '12px 0 0',
-                      fontSize: '2rem',
-                      fontWeight: 700,
-                    }}
-                  >
-                    {metricValue(climateData?.air_temp ?? null, '°C')}
-                  </p>
+                  <h3>{TEXT.sensorLabels.airTemp}</h3>
+                  <p className="sensor-card__metric">{metricValue(climateData?.air_temp ?? null, '\u00B0C')}</p>
                 </article>
 
                 <article className="sensor-card">
-                  <h3>Влажность воздуха</h3>
-                  <p
-                    style={{
-                      margin: '12px 0 0',
-                      fontSize: '2rem',
-                      fontWeight: 700,
-                    }}
-                  >
-                    {metricValue(climateData?.humidity ?? null, '%')}
-                  </p>
+                  <h3>{TEXT.sensorLabels.humidity}</h3>
+                  <p className="sensor-card__metric">{metricValue(climateData?.humidity ?? null, '%')}</p>
                 </article>
 
                 <article className="sensor-card">
-                  <h3>Температура воды</h3>
-                  <p
-                    style={{
-                      margin: '12px 0 0',
-                      fontSize: '2rem',
-                      fontWeight: 700,
-                    }}
-                  >
-                    {metricValue(waterData?.water_temp ?? null, '°C')}
-                  </p>
+                  <h3>{TEXT.sensorLabels.waterTemp}</h3>
+                  <p className="sensor-card__metric">{metricValue(waterData?.water_temp ?? null, '\u00B0C')}</p>
                 </article>
               </div>
             </section>
 
             <section className="dashboard__section">
               <div className="section-heading">
-                <h2>Мысли Нейрогнома</h2>
+                <h2>{TEXT.sections.thoughts}</h2>
               </div>
 
-              <div
-                className="sensor-card"
-                style={{
-                  padding: '24px',
-                  background:
-                    'radial-gradient(circle at top, rgba(55, 145, 78, 0.18), rgba(7, 18, 12, 0.96))',
-                  border: '1px solid rgba(133, 198, 107, 0.2)',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    gap: '16px',
-                    flexWrap: 'wrap',
-                    marginBottom: '18px',
-                  }}
-                >
-                  <div>
-                    <h3 style={{ margin: 0, color: '#d7ffc2' }}>Терминал решений</h3>
-                    <p style={{ margin: '6px 0 0', color: 'rgba(208, 255, 185, 0.72)' }}>
-                      Последние решения Нейрогнома загружаются автоматически каждые 15 секунд.
-                    </p>
+              <div className="sensor-card sensor-card--terminal">
+                <div className="panel-header">
+                  <div className="panel-copy">
+                    <h3 className="panel-title">{TEXT.terminal.title}</h3>
+                    <p className="panel-subtitle">{TEXT.terminal.subtitle}</p>
                   </div>
 
                   <button
                     type="button"
-                    className="control-button control-button--primary"
+                    className="control-button control-button--primary control-button--wide"
                     onClick={requestAiDecision}
                     disabled={isAiThinking}
-                    style={{
-                      minWidth: '230px',
-                      opacity: isAiThinking ? 0.7 : 1,
-                      cursor: isAiThinking ? 'wait' : 'pointer',
-                    }}
                   >
-                    {isAiThinking ? 'Нейрогном думает...' : 'Запросить решение сейчас'}
+                    {isAiThinking ? TEXT.terminal.thinking : TEXT.terminal.askNow}
                   </button>
                 </div>
 
-                <div
-                  ref={terminalRef}
-                  style={{
-                    minHeight: '280px',
-                    maxHeight: '380px',
-                    overflowY: 'auto',
-                    padding: '18px',
-                    borderRadius: '18px',
-                    background:
-                      'linear-gradient(180deg, rgba(2, 10, 5, 0.96), rgba(7, 23, 12, 0.96))',
-                    border: '1px solid rgba(92, 255, 151, 0.18)',
-                    boxShadow:
-                      'inset 0 0 0 1px rgba(124, 255, 165, 0.04), inset 0 -24px 48px rgba(0, 0, 0, 0.24)',
-                    fontFamily:
-                      '"IBM Plex Mono", "Fira Code", "SFMono-Regular", Consolas, monospace',
-                    color: '#9dffb0',
-                  }}
-                >
+                <div ref={terminalRef} className="terminal-window">
                   {aiLogs.length === 0 ? (
-                    <div style={{ color: 'rgba(157, 255, 176, 0.72)' }}>
-                      &gt; Журнал решений пока пуст.
-                    </div>
+                    <div className="terminal-window__empty">{TEXT.terminal.empty}</div>
                   ) : null}
 
                   {aiLogs.map((log) => {
                     const commands = parseCommands(log.commands_json)
                     return (
-                      <div
-                        key={log.id}
-                        style={{
-                          marginBottom: '16px',
-                          paddingBottom: '16px',
-                          borderBottom: '1px solid rgba(120, 255, 170, 0.12)',
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word',
-                          lineHeight: 1.55,
-                        }}
-                      >
-                        <div style={{ color: '#53d97d' }}>&gt; [{log.timestamp}]</div>
-                        <div>Мысль: {log.thought || 'Нет пояснения.'}</div>
+                      <div key={log.id} className="terminal-log">
+                        <div className="terminal-log__timestamp">&gt; [{log.timestamp}]</div>
                         <div>
-                          Команды:{' '}
+                          {TEXT.terminal.thoughtPrefix}: {log.thought || TEXT.terminal.noThought}
+                        </div>
+                        <div>
+                          {TEXT.terminal.commands}:{' '}
                           {commands.length > 0
                             ? commands.map((command) => formatCommand(command)).join(' | ')
-                            : 'действия не требуются'}
+                            : TEXT.terminal.noActions}
                         </div>
                       </div>
                     )
                   })}
 
                   {isAiThinking ? (
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '10px',
-                        color: '#d8ff8d',
-                        textShadow: '0 0 14px rgba(223, 255, 109, 0.2)',
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: '10px',
-                          height: '10px',
-                          borderRadius: '50%',
-                          background: '#c4ff62',
-                          boxShadow: '0 0 16px rgba(196, 255, 98, 0.75)',
-                          flexShrink: 0,
-                        }}
-                      />
-                      <span>Нейрогном анализирует данные...</span>
+                    <div className="terminal-status">
+                      <span className="terminal-status__dot" />
+                      <span>{TEXT.terminal.analyzing}</span>
                     </div>
                   ) : null}
                 </div>
@@ -662,51 +617,20 @@ function App() {
 
             <section className="dashboard__section">
               <div className="section-heading">
-                <h2>Спросить Нейрогнома</h2>
+                <h2>{TEXT.sections.ask}</h2>
               </div>
 
-              <div
-                className="sensor-card"
-                style={{
-                  display: 'grid',
-                  gap: '18px',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: '12px',
-                    maxHeight: '320px',
-                    overflowY: 'auto',
-                    paddingRight: '4px',
-                  }}
-                >
+              <div className="sensor-card sensor-card--chat">
+                <div className="chat-thread">
                   {chatMessages.map((message, index) => (
                     <div
                       key={`${message.role}-${index}`}
-                      style={{
-                        justifySelf: message.role === 'user' ? 'end' : 'start',
-                        maxWidth: '85%',
-                        padding: '14px 16px',
-                        borderRadius: '18px',
-                        background:
-                          message.role === 'user'
-                            ? 'linear-gradient(135deg, rgba(33, 130, 79, 0.18), rgba(46, 186, 109, 0.22))'
-                            : 'rgba(255, 255, 255, 0.06)',
-                        border:
-                          message.role === 'user'
-                            ? '1px solid rgba(133, 198, 107, 0.24)'
-                            : '1px solid rgba(255, 255, 255, 0.08)',
-                      }}
+                      className={`chat-bubble ${
+                        message.role === 'user' ? 'chat-bubble--user' : 'chat-bubble--assistant'
+                      }`}
                     >
-                      <strong
-                        style={{
-                          display: 'block',
-                          marginBottom: '6px',
-                          color: message.role === 'user' ? '#dfffd0' : '#f4ffe9',
-                        }}
-                      >
-                        {message.role === 'user' ? 'Вы' : 'Нейрогном'}
+                      <strong className="chat-bubble__author">
+                        {message.role === 'user' ? TEXT.chat.you : TEXT.chat.assistant}
                       </strong>
                       <span>{message.text}</span>
                     </div>
@@ -714,45 +638,22 @@ function App() {
                   <div ref={messagesEndRef} />
                 </div>
 
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'minmax(0, 1fr) auto',
-                    gap: '12px',
-                    alignItems: 'center',
-                  }}
-                >
+                <div className="chat-compose">
                   <input
+                    className="glass-input"
                     value={chatInput}
                     onChange={(event) => setChatInput(event.target.value)}
                     onKeyDown={handleChatInputKeyDown}
-                    placeholder="Например: Почему ты ничего не включил?"
-                    style={{
-                      width: '100%',
-                      borderRadius: '18px',
-                      border: '1px solid rgba(255, 255, 255, 0.12)',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      color: 'inherit',
-                      padding: '14px 16px',
-                      font: 'inherit',
-                    }}
+                    placeholder={TEXT.chat.askPlaceholder}
                   />
                   <button
                     type="button"
-                    className="control-button control-button--primary"
+                    className="control-button control-button--primary control-button--icon"
                     onClick={() => void askChatQuestion(chatInput)}
                     disabled={isChatLoading}
-                    aria-label="Отправить сообщение"
-                    style={{
-                      minWidth: '52px',
-                      minHeight: '52px',
-                      padding: 0,
-                      display: 'grid',
-                      placeItems: 'center',
-                      fontSize: '1.1rem',
-                    }}
+                    aria-label={TEXT.chat.sendAria}
                   >
-                    {isChatLoading ? '…' : '➜'}
+                    {isChatLoading ? '...' : TEXT.chat.sendIcon}
                   </button>
                 </div>
               </div>
@@ -762,35 +663,26 @@ function App() {
           <>
             <section className="dashboard__section">
               <div className="section-heading">
-                <h2>Ручное управление</h2>
+                <h2>{TEXT.sections.manual}</h2>
               </div>
 
-              <div
-                className="devices-grid"
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                  gap: '24px',
-                  alignItems: 'start',
-                  width: '100%',
-                }}
-              >
+              <div className="devices-grid">
                 <DeviceCard
-                  title="Насос"
+                  title={TEXT.deviceTitles.pump}
                   deviceType="pump"
                   timerValue={timerValues.pump}
                   onTimerChange={(value) => setTimerValue('pump', value)}
                   onCommand={sendCommand}
                 />
                 <DeviceCard
-                  title="Свет"
+                  title={TEXT.deviceTitles.light}
                   deviceType="light"
                   timerValue={timerValues.light}
                   onTimerChange={(value) => setTimerValue('light', value)}
                   onCommand={sendCommand}
                 />
                 <DeviceCard
-                  title="Вентилятор"
+                  title={TEXT.deviceTitles.fan}
                   deviceType="fan"
                   timerValue={timerValues.fan}
                   onTimerChange={(value) => setTimerValue('fan', value)}
@@ -801,70 +693,37 @@ function App() {
 
             <section className="dashboard__section">
               <div className="section-heading">
-                <h2>Отладка симуляции</h2>
+                <h2>{TEXT.sections.simulation}</h2>
               </div>
 
-              <div
-                className="sensor-card"
-                style={{
-                  display: 'grid',
-                  gap: '16px',
-                  border: '1px solid rgba(255, 190, 92, 0.18)',
-                  background:
-                    'linear-gradient(180deg, rgba(52, 30, 10, 0.32), rgba(17, 21, 14, 0.88))',
-                }}
-              >
-                <p style={{ margin: 0, color: 'rgba(255, 236, 201, 0.78)' }}>
-                  Панель для переключения тестовых режимов ESP32-симулятора через MQTT.
+              <div className="sensor-card sensor-card--warm">
+                <p className="sensor-card__description sensor-card__description--warm">
+                  {TEXT.simulation.description}
                 </p>
 
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '12px',
-                    flexWrap: 'wrap',
-                  }}
-                >
+                <div className="button-row">
                   <button
                     type="button"
-                    className="control-button"
+                    className="control-button control-button--warm"
                     onClick={() => publishSimulationMode('HEAT')}
-                    style={{
-                      background: 'linear-gradient(135deg, #8c2218, #ff6b3d)',
-                      color: '#fff4ec',
-                      border: '1px solid rgba(255, 130, 86, 0.45)',
-                      boxShadow: '0 14px 28px rgba(140, 34, 24, 0.28)',
-                    }}
                   >
-                    Имитировать жару
+                    {TEXT.simulation.heat}
                   </button>
 
                   <button
                     type="button"
-                    className="control-button"
+                    className="control-button control-button--cool"
                     onClick={() => publishSimulationMode('COLD')}
-                    style={{
-                      background: 'linear-gradient(135deg, #1c466c, #5aa6ff)',
-                      color: '#eef7ff',
-                      border: '1px solid rgba(112, 178, 255, 0.4)',
-                      boxShadow: '0 14px 28px rgba(28, 70, 108, 0.24)',
-                    }}
                   >
-                    Имитировать холод
+                    {TEXT.simulation.cold}
                   </button>
 
                   <button
                     type="button"
-                    className="control-button"
+                    className="control-button control-button--success"
                     onClick={() => publishSimulationMode('NORMAL')}
-                    style={{
-                      background: 'linear-gradient(135deg, #1d7f52, #79c96a)',
-                      color: '#f4ffe9',
-                      border: '1px solid rgba(133, 198, 107, 0.35)',
-                      boxShadow: '0 14px 28px rgba(29, 127, 82, 0.24)',
-                    }}
                   >
-                    Вернуть в норму
+                    {TEXT.simulation.normal}
                   </button>
                 </div>
               </div>
