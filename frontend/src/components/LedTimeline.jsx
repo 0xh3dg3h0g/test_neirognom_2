@@ -61,10 +61,7 @@ export default function LedTimeline({
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="glass-panel-soft rounded-[18px] px-4 py-2.5 text-sm text-white/72">
-          Текущий этап: <span className="font-medium text-white">{stages[activeIndex].id}</span> · {stages[activeIndex].label}
-        </div>
+      <div className="mt-5 flex justify-end">
         <button
           type="button"
           onClick={onPlay}

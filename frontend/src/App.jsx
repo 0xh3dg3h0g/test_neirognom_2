@@ -396,9 +396,6 @@ export default function App() {
           </div>
           <div>
             <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Ручное управление</div>
-            <p className="mt-1.5 text-sm text-white/62">
-              Экран можно связать с реальным API, MQTT или контроллером без переделки структуры.
-            </p>
           </div>
         </div>
 

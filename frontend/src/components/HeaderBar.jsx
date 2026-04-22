@@ -16,7 +16,7 @@ export default function HeaderBar({ mode, setMode, currentTime, currentDate }) {
                 Нейроагроном
               </div>
               <p className="mt-1.5 text-sm text-white/62">
-                Умная сити-ферма · стеклянный интерфейс управления
+                Умная сити-ферма
               </p>
             </div>
           </div>
