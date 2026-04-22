@@ -468,12 +468,13 @@ export default function App() {
         <main className="grid flex-1 gap-4 xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_380px]">
           <div className="min-h-0">{mode === 'monitoring' ? renderMonitoring() : renderManual()}</div>
 
-          <aside className="grid min-h-0 gap-4 xl:grid-rows-[minmax(0,1fr)_280px]">
+          <aside className="flex flex-col h-full min-h-0">
             <ChatPanel
               messages={messages}
               input={chatInput}
               onInput={setChatInput}
               onSend={handleSendMessage}
+              className="flex-1" 
             />
           </aside>
         </main>

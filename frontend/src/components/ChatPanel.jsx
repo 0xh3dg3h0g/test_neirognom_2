@@ -20,9 +20,9 @@ function Bubble({ message }) {
   )
 }
 
-export default function ChatPanel({ messages, input, onInput, onSend }) {
+export default function ChatPanel({ messages, input, onInput, onSend, className = "" }) {
   return (
-    <GlassCard className="flex h-full min-h-0 flex-col rounded-[28px]">
+    <GlassCard className={`flex h-full min-h-0 flex-col rounded-[28px] ${className}`}>
       <div className="flex items-start gap-3">
         <div className="glass-panel-soft overflow-hidden rounded-[22px] p-2">
           <img src={placeholder} alt="Заглушка ассистента" className="h-16 w-16 rounded-[18px] object-cover md:h-20 md:w-20" />
