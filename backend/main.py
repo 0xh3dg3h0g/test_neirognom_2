@@ -518,6 +518,35 @@ def read_root() -> dict[str, str]:
     return {"status": "ok", "db": "initialized"}
 
 
+@app.get("/api/telemetry")
+def get_telemetry() -> dict[str, Any]:
+    snapshot = get_latest_data_snapshot()
+    air_temp = snapshot.get("air_temp")
+    humidity = snapshot.get("humidity")
+    water_temp = snapshot.get("water_temp")
+
+    if air_temp is None or humidity is None or water_temp is None:
+        for record in reversed(get_recent_telemetry(10)):
+            payload = record.get("parsed_payload")
+            if not isinstance(payload, dict):
+                continue
+
+            topic = str(record.get("topic", ""))
+            if topic.endswith("/climate"):
+                if air_temp is None:
+                    air_temp = payload.get("air_temp")
+                if humidity is None:
+                    humidity = payload.get("humidity")
+            elif topic.endswith("/water") and water_temp is None:
+                water_temp = payload.get("water_temp")
+
+    return {
+        "air_temp": air_temp,
+        "humidity": humidity,
+        "water_temp": water_temp,
+    }
+
+
 @app.post("/api/device/control")
 def control_device(request: DeviceControlRequest) -> dict[str, str]:
     topic = f"farm/{request.target_id}/cmd/{request.device_type}"

@@ -25,6 +25,10 @@ import {
   ThermometerIcon,
 } from './components/Icons'
 
+const API_BASE_URL = 'http://localhost:8000'
+const TELEMETRY_POLL_INTERVAL_MS = 4000
+const LOGS_POLL_INTERVAL_MS = 5000
+
 function formatTime(date = new Date()) {
   return new Intl.DateTimeFormat('ru-RU', {
     hour: '2-digit',
@@ -40,8 +44,44 @@ function formatDate(date = new Date()) {
   }).format(date)
 }
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value))
+function formatTimestampLabel(timestamp) {
+  if (!timestamp || typeof timestamp !== 'string') {
+    return formatTime()
+  }
+
+  if (timestamp.length >= 16) {
+    return timestamp.slice(11, 16)
+  }
+
+  return timestamp
+}
+
+function toNumberOrFallback(value, fallback) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function buildChatHistory(messages, userMessage) {
+  return [...messages, userMessage].map((message) => ({
+    role: message.from === 'assistant' ? 'assistant' : 'user',
+    text: message.text,
+  }))
+}
+
+async function requestJson(path, options = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+    ...options,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`)
+  }
+
+  return response.json()
 }
 
 export default function App() {
@@ -62,7 +102,7 @@ export default function App() {
       text,
       time: formatTime(),
     }
-    setThoughts((prev) => [item, ...prev].slice(0, 3))
+    setThoughts((prev) => [item, ...prev].slice(0, 5))
   }
 
   const pushAssistantMessage = (text) => {
@@ -88,35 +128,59 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const drift = setInterval(() => {
-      setMetrics((prev) => {
-        const next = {
-          waterTemp: clamp(Number((prev.waterTemp + (Math.random() - 0.5) * 0.14).toFixed(1)), 18.8, 22.4),
-          airHumidity: clamp(Math.round(prev.airHumidity + (Math.random() - 0.5) * 2), 60, 75),
-          airTemp: clamp(Number((prev.airTemp + (Math.random() - 0.5) * 0.24).toFixed(1)), 21.4, 25.2),
-        }
+    let isMounted = true
 
-        if (next.airTemp > 24.6) {
-          setDevices((current) => ({
-            ...current,
-            fans: {
-              ...current.fans,
-              enabled: true,
-              level: clamp(current.fans.level + 4, 55, 90),
-            },
-          }))
-          pushThought('Стало чуть жарче. Мягко поднимаю скорость вентиляторов.')
-        }
+    const loadTelemetry = async () => {
+      try {
+        const data = await requestJson('/api/telemetry')
+        if (!isMounted) return
 
-        if (next.airHumidity < 62) {
-          pushThought('Влажность просела ниже комфорта. Стоит проверить режим полива.')
-        }
+        setMetrics((prev) => ({
+          waterTemp: toNumberOrFallback(data.water_temp, prev.waterTemp),
+          airHumidity: toNumberOrFallback(data.humidity, prev.airHumidity),
+          airTemp: toNumberOrFallback(data.air_temp, prev.airTemp),
+        }))
+      } catch (error) {
+        console.error('Failed to load telemetry', error)
+      }
+    }
 
-        return next
-      })
-    }, 7000)
+    loadTelemetry()
+    const telemetryPoller = setInterval(loadTelemetry, TELEMETRY_POLL_INTERVAL_MS)
 
-    return () => clearInterval(drift)
+    return () => {
+      isMounted = false
+      clearInterval(telemetryPoller)
+    }
+  }, [])
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadThoughts = async () => {
+      try {
+        const data = await requestJson('/api/logs?limit=5')
+        if (!isMounted || !Array.isArray(data)) return
+
+        setThoughts(
+          data.map((entry) => ({
+            id: `log-${entry.id ?? crypto.randomUUID()}`,
+            text: entry.thought || 'Нет записанной мысли.',
+            time: formatTimestampLabel(entry.timestamp),
+          })),
+        )
+      } catch (error) {
+        console.error('Failed to load AI logs', error)
+      }
+    }
+
+    loadThoughts()
+    const logsPoller = setInterval(loadThoughts, LOGS_POLL_INTERVAL_MS)
+
+    return () => {
+      isMounted = false
+      clearInterval(logsPoller)
+    }
   }, [])
 
   useEffect(() => {
@@ -178,7 +242,19 @@ export default function App() {
     [metrics],
   )
 
-  const handleToggle = (key) => (enabled) => {
+  const handleToggle = (key) => async (enabled) => {
+    const deviceType = {
+      fans: 'fan',
+      lights: 'light',
+      pumps: 'pump',
+    }[key]
+
+    const deviceLabel = {
+      fans: 'вентиляторы',
+      lights: 'освещение',
+      pumps: 'насосы',
+    }[key]
+
     setDevices((prev) => ({
       ...prev,
       [key]: {
@@ -187,13 +263,27 @@ export default function App() {
       },
     }))
 
-    const deviceLabel = {
-      fans: 'вентиляторы',
-      lights: 'освещение',
-      pumps: 'насосы',
-    }[key]
-
-    pushThought(`${enabled ? 'Включаю' : 'Выключаю'} ${deviceLabel}.`)
+    try {
+      await requestJson('/api/device/control', {
+        method: 'POST',
+        body: JSON.stringify({
+          target_id: 'tray_1',
+          device_type: deviceType,
+          state: enabled ? 'ON' : 'OFF',
+        }),
+      })
+      pushThought(`${enabled ? 'Включаю' : 'Выключаю'} ${deviceLabel}.`)
+    } catch (error) {
+      console.error(`Failed to toggle ${deviceType}`, error)
+      setDevices((prev) => ({
+        ...prev,
+        [key]: {
+          ...prev[key],
+          enabled: !enabled,
+        },
+      }))
+      pushThought(`Не удалось отправить команду на ${deviceLabel}.`)
+    }
   }
 
   const handleRange = (key, value) => {
@@ -206,57 +296,34 @@ export default function App() {
     }))
   }
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     const text = chatInput.trim()
     if (!text) return
 
-    setMessages((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), from: 'user', text, time: formatTime() },
-    ])
+    const userMessage = {
+      id: crypto.randomUUID(),
+      from: 'user',
+      text,
+      time: formatTime(),
+    }
+
+    setMessages((prev) => [...prev, userMessage])
     setChatInput('')
 
-    const lower = text.toLowerCase()
+    try {
+      const data = await requestJson('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: text,
+          history: buildChatHistory(messages, userMessage),
+        }),
+      })
 
-    setTimeout(() => {
-      if (lower.includes('ситуац') || lower.includes('статус') || lower.includes('как дела')) {
-        pushAssistantMessage(
-          `Сейчас всё стабильно: вода ${metrics.waterTemp} °C, влажность ${metrics.airHumidity}%, воздух ${metrics.airTemp} °C. Вентиляторы ${devices.fans.enabled ? 'включены' : 'выключены'}, LED сценарий — ${devices.led.scenario}.`,
-        )
-        return
-      }
-
-      if (lower.includes('вент')) {
-        setDevices((prev) => ({
-          ...prev,
-          fans: { ...prev.fans, enabled: true, level: 80 },
-        }))
-        pushThought('Получена команда из чата. Перевожу вентиляторы на 80%.')
-        pushAssistantMessage('Готово. Поднял скорость вентиляторов до 80%.')
-        return
-      }
-
-      if (lower.includes('свет') || lower.includes('led')) {
-        setActiveLedStage(5)
-        setIsLedPlaying(true)
-        pushThought('Перезапускаю дневной LED сценарий по запросу из чата.')
-        pushAssistantMessage('Сделано. Включён дневной LED сценарий с плавной последовательностью каналов.')
-        return
-      }
-
-      if (lower.includes('насос')) {
-        setDevices((prev) => ({
-          ...prev,
-          pumps: { ...prev.pumps, enabled: true, level: 78 },
-        }))
-        pushAssistantMessage('Насосы активны. Поднял производительность до 78%.')
-        return
-      }
-
-      pushAssistantMessage(
-        'Принял сообщение. Для демо я уже умею отвечать на вопросы о статусе, вентиляторах, насосах и LED сценарии.',
-      )
-    }, 450)
+      pushAssistantMessage(data.reply || 'Недостаточно данных для ответа.')
+    } catch (error) {
+      console.error('Failed to send chat message', error)
+      pushAssistantMessage('Не удалось подключиться к ассистенту. Проверьте backend.')
+    }
   }
 
   const renderMonitoring = () => (
