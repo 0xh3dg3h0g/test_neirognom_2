@@ -375,23 +375,6 @@ export default function App() {
             icon={<PumpIcon className="h-6 w-6" />}
             accent="#8EC8FF"
           />
-          <DeviceCard
-            title={devices.led.title}
-            subtitle="Сценарий"
-            level={100}
-            enabled
-            onToggle={() => {}}
-            icon={<LedIcon className="h-6 w-6" />}
-            accent="#D58BFF"
-            action={
-              <button
-                type="button"
-                className="shrink-0 rounded-[18px] border border-violet-200/18 bg-violet-400/10 px-4 py-2 text-sm font-medium text-violet-100 transition hover:bg-violet-400/18"
-              >
-                Настроить
-              </button>
-            }
-          />
         </div>
       </GlassCard>
     </div>
