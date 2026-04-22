@@ -394,16 +394,6 @@ export default function App() {
           />
         </div>
       </GlassCard>
-
-      <LedTimeline
-        stages={ledStages}
-        activeIndex={activeLedStage}
-        isPlaying={isLedPlaying}
-        onPlay={() => {
-          setActiveLedStage(0);
-          setIsLedPlaying(true);
-        }}
-      />
     </div>
   )
 
