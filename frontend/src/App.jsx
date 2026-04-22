@@ -327,7 +327,7 @@ export default function App() {
   }
 
   const renderMonitoring = () => (
-    <div className="grid h-full min-h-0 gap-4 xl:grid-rows-[auto_auto_minmax(0,1fr)]">
+    <div className="flex flex-col gap-4 h-full min-h-0">
       <GlassCard className="rounded-[28px]">
         <div className="flex items-center justify-between gap-4">
           <div>
@@ -341,42 +341,49 @@ export default function App() {
           ))}
         </div>
       </GlassCard>
-
-      <GlassCard className="rounded-[28px]">
-        <div>
-          <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Устройства</div>
-          <p className="mt-1.5 text-sm text-white/62">Полупрозрачные тумблеры и быстрый доступ к ключевым системам.</p>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3 flex-1 min-h-0">
+        <GlassCard className="rounded-[28px] xl:col-span-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Устройства</div>
+              <p className="mt-1.5 text-sm text-white/62">Быстрый доступ к ключевым системам.</p>
+            </div>
+            <SlidersIcon className="h-6 w-6 text-white/20" />
+          </div>
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <DeviceCard
+              title={devices.fans.title}
+              subtitle={devices.fans.subtitle}
+              level={devices.fans.level}
+              enabled={devices.fans.enabled}
+              onToggle={handleToggle('fans')}
+              icon={<FanIcon className="h-6 w-6" />}
+              accent="#75F08D"
+            />
+            <DeviceCard
+              title={devices.lights.title}
+              subtitle={devices.lights.subtitle}
+              level={devices.lights.level}
+              enabled={devices.lights.enabled}
+              onToggle={handleToggle('lights')}
+              icon={<LightIcon className="h-6 w-6" />}
+              accent="#FFD667"
+            />
+            <DeviceCard
+              title={devices.pumps.title}
+              subtitle={devices.pumps.subtitle}
+              level={devices.pumps.level}
+              enabled={devices.pumps.enabled}
+              onToggle={handleToggle('pumps')}
+              icon={<PumpIcon className="h-6 w-6" />}
+              accent="#8EC8FF"
+            />
+          </div>
+        </GlassCard>
+        <div className="min-h-0">
+          <ThoughtStream thoughts={thoughts} />
         </div>
-        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <DeviceCard
-            title={devices.fans.title}
-            subtitle={devices.fans.subtitle}
-            level={devices.fans.level}
-            enabled={devices.fans.enabled}
-            onToggle={handleToggle('fans')}
-            icon={<FanIcon className="h-6 w-6" />}
-            accent="#75F08D"
-          />
-          <DeviceCard
-            title={devices.lights.title}
-            subtitle={devices.lights.subtitle}
-            level={devices.lights.level}
-            enabled={devices.lights.enabled}
-            onToggle={handleToggle('lights')}
-            icon={<LightIcon className="h-6 w-6" />}
-            accent="#FFD667"
-          />
-          <DeviceCard
-            title={devices.pumps.title}
-            subtitle={devices.pumps.subtitle}
-            level={devices.pumps.level}
-            enabled={devices.pumps.enabled}
-            onToggle={handleToggle('pumps')}
-            icon={<PumpIcon className="h-6 w-6" />}
-            accent="#8EC8FF"
-          />
-        </div>
-      </GlassCard>
+      </div>
     </div>
   )
 
@@ -468,7 +475,6 @@ export default function App() {
               onInput={setChatInput}
               onSend={handleSendMessage}
             />
-            <ThoughtStream thoughts={thoughts} />
           </aside>
         </main>
       </div>
