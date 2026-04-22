@@ -25,9 +25,18 @@ import {
   ThermometerIcon,
 } from './components/Icons'
 
-const API_BASE_URL = 'http://localhost:8000'
+const API_BASE_URL = window.location.hostname === 'localhost'
+  ? 'http://localhost:8000'
+  : ''
 const TELEMETRY_POLL_INTERVAL_MS = 2000
 const LOGS_POLL_INTERVAL_MS = 5000
+
+function makeId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID()
+  }
+  return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
 
 function formatTime(date = new Date()) {
   return new Intl.DateTimeFormat('ru-RU', {
@@ -98,7 +107,7 @@ export default function App() {
 
   const pushThought = (text) => {
     const item = {
-      id: crypto.randomUUID(),
+      id: makeId(),
       text,
       time: formatTime(),
     }
@@ -109,7 +118,7 @@ export default function App() {
     setMessages((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: makeId(),
         from: 'assistant',
         text,
         time: formatTime(),
@@ -164,7 +173,7 @@ export default function App() {
 
         setThoughts(
           data.map((entry) => ({
-            id: `log-${entry.id ?? crypto.randomUUID()}`,
+            id: `log-${entry.id ?? makeId()}`,
             text: entry.thought || 'Нет записанной мысли.',
             time: formatTimestampLabel(entry.timestamp),
           })),
@@ -301,7 +310,7 @@ export default function App() {
     if (!text) return
 
     const userMessage = {
-      id: crypto.randomUUID(),
+      id: makeId(),
       from: 'user',
       text,
       time: formatTime(),
