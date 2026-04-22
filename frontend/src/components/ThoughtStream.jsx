@@ -10,17 +10,30 @@ export default function ThoughtStream({ thoughts }) {
         </div>
         <div>
           <div className="text-[22px] font-semibold tracking-tight">Мысли сети</div>
-          <p className="mt-1 text-sm text-white/60">Короткие заметки о том, что система решила сделать.</p>
+          <p className="mt-1 text-sm text-white/60">Лог решений системы.</p>
         </div>
       </div>
 
-      <div className="mt-4 grid flex-1 gap-3">
-        {thoughts.slice(0, 3).map((thought) => (
-          <div key={thought.id} className="glass-panel-soft rounded-[22px] px-4 py-3">
+      <div 
+        className="mt-4 flex-1 space-y-3 overflow-y-auto scrollbar-hide"
+        style={{
+          maskImage: 'linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)',
+          WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)'
+        }}
+      >
+        <div className="h-4" /> 
+        
+        {thoughts.map((thought) => (
+          <div 
+            key={thought.id} 
+            className="glass-panel-soft rounded-[22px] px-4 py-3 animate-in fade-in slide-in-from-right-2 duration-500"
+          >
             <div className="text-sm leading-6 text-white/88">{thought.text}</div>
             <div className="mt-2 text-[11px] text-white/42">{thought.time}</div>
           </div>
         ))}
+
+        <div className="h-4" />
       </div>
     </GlassCard>
   )
