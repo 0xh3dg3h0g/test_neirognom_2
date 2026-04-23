@@ -7,17 +7,20 @@ function Bubble({ message }) {
   return (
     <div className={`flex ${isAssistant ? 'justify-start' : 'justify-end'}`}>
       <div
-        className={`max-w-[92%] rounded-[22px] px-4 py-3 text-sm leading-6 ${
+        className={`max-w-[92%] rounded-[22px] px-4 py-2.5 text-sm leading-6 ${
           isAssistant
             ? 'border border-white/12 bg-white/[0.07] text-white/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
             : 'border border-emerald-200/12 bg-emerald-400/14 text-white'
         }`}
       >
-        <div className="text-sm leading-6 text-white">
-          {message.text}
-          <span className="ml-2 inline-block text-[11px] text-white/42 align-baseline">
+        <div className="relative min-h-[24px] pr-14">
+          <div className="text-sm leading-6 text-white">
+            {message.text}
+          </div>
+
+          <div className="absolute bottom-0 right-0 text-[11px] text-white/42">
             {message.time}
-          </span>
+          </div>
         </div>
       </div>
     </div>
@@ -43,7 +46,7 @@ export default function ChatPanel({ messages, input, onInput, onSend, className 
           <div className="absolute inset-0 bg-violet-500/25 mix-blend-color pointer-events-none" />
         </div>
         <div className="min-w-0">
-          <div className="text-[18px] font-semibold tracking-tight md:text-[20px]">Чат ассистента</div>
+          <div className="text-[18px] font-semibold tracking-tight md:text-[20px]">Чат Нейрогнома</div>
           <div className="mt-1.5 inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
             <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" /> Онлайн
           </div>
