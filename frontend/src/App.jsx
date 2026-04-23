@@ -18,7 +18,6 @@ import {
   DropletIcon,
   FanIcon,
   HumidityIcon,
-  LedIcon,
   LightIcon,
   PumpIcon,
   SlidersIcon,
@@ -336,30 +335,31 @@ export default function App() {
   }
 
   const renderMonitoring = () => (
-    <div className="flex flex-col gap-4 h-full min-h-0">
-      <GlassCard className="rounded-[28px]">
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <GlassCard className="rounded-[28px] shrink-0">
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Мониторинг</div>
             <p className="mt-1.5 text-sm text-white/62">Основные параметры фермы в реальном времени.</p>
           </div>
         </div>
-        <div className="mt-4 grid gap-4 xl:grid-cols-3">
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {metricsList.map((item) => (
             <MetricCard key={item.title} {...item} />
           ))}
         </div>
       </GlassCard>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3 flex-1 min-h-0">
-        <GlassCard className="rounded-[28px] xl:col-span-2">
-          <div className="flex items-center justify-between">
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <GlassCard className="flex min-h-0 flex-col overflow-hidden rounded-[28px]">
+          <div className="flex shrink-0 items-center justify-between xl:gap-3">
             <div>
-              <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Устройства</div>
-              <p className="mt-1.5 text-sm text-white/62">Быстрый доступ к ключевым системам.</p>
+              <div className="text-[22px] font-semibold tracking-tight md:text-[24px] xl:text-[22px] 2xl:text-[24px]">Устройства</div>
+              <p className="mt-1.5 text-sm text-white/62 xl:mt-1 xl:text-[13px] 2xl:mt-1.5 2xl:text-sm">Быстрый доступ к ключевым системам.</p>
             </div>
             <SlidersIcon className="h-6 w-6 text-white/20" />
           </div>
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3 items-start content-start auto-rows-max overflow-hidden">
             <DeviceCard
               title={devices.fans.title}
               subtitle={devices.fans.subtitle}
@@ -389,8 +389,9 @@ export default function App() {
             />
           </div>
         </GlassCard>
+
         <div className="min-h-0">
-          <ThoughtStream thoughts={thoughts} />
+          <ThoughtStream thoughts={thoughts} className="h-full" />
         </div>
       </div>
     </div>
@@ -453,8 +454,8 @@ export default function App() {
         activeIndex={activeLedStage}
         isPlaying={isLedPlaying}
         onPlay={() => {
-          setActiveLedStage(0);
-          setIsLedPlaying(true);
+          setActiveLedStage(0)
+          setIsLedPlaying(true)
         }}
         compact
       />
@@ -471,16 +472,16 @@ export default function App() {
           currentDate={currentDate}
         />
 
-        <main className="grid flex-1 gap-4 xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_380px]">
-          <div className="min-h-0">{mode === 'monitoring' ? renderMonitoring() : renderManual()}</div>
+        <main className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="flex h-full min-h-0 flex-col">{mode === 'monitoring' ? renderMonitoring() : renderManual()}</div>
 
-          <aside className="flex flex-col h-full min-h-0">
+          <aside className="flex h-full min-h-0 flex-col">
             <ChatPanel
               messages={messages}
               input={chatInput}
               onInput={setChatInput}
               onSend={handleSendMessage}
-              className="flex-1" 
+              className="flex-1"
             />
           </aside>
         </main>

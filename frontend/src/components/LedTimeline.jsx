@@ -61,11 +61,11 @@ export default function LedTimeline({
         </div>
       </div>
 
-      <div className="mt-5 flex justify-end">
+      <div className="mt-5 flex w-full justify-end lg:justify-center 2xl:justify-end">
         <button
           type="button"
           onClick={onPlay}
-          className="group inline-flex items-center gap-3 rounded-[20px] border border-violet-200/18 bg-gradient-to-r from-violet-500/75 to-fuchsia-500/65 px-5 py-3 text-sm font-medium text-white transition hover:scale-[1.01] hover:brightness-110 md:px-7"
+          className="group flex w-full items-center justify-center gap-3 whitespace-nowrap rounded-[20px] border border-violet-200/18 bg-gradient-to-r from-violet-500/75 to-fuchsia-500/65 px-4 py-3 text-sm font-medium text-white transition hover:scale-[1.01] hover:brightness-110 md:px-7 lg:w-full 2xl:w-auto"
           style={{ boxShadow: '0 18px 36px rgba(173, 78, 255, 0.24)' }}
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/14">
