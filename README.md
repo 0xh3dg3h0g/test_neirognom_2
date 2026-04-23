@@ -74,28 +74,37 @@ cd ..
 
 ## Настройка
 
-Backend вызывает `load_dotenv()` в файле `backend/main.py`. Поэтому реальный файл окружения нужно разместить в папке `backend/`:
+Backend и симулятор читают переменные окружения из файла:
 
 ```text
-backend/.env
+.env
 ```
 
-Создайте его по шаблону `backend/.env.example`:
+Создайте этот файл по шаблону `.env.example`.
+
+MQTT-брокер настраивается через переменные окружения `BROKER_HOST` и `BROKER_PORT`. По умолчанию используется локальный брокер на `localhost`.
+
+Пример файла `.env`:
 
 ```dotenv
+BROKER_HOST=127.0.0.1
+BROKER_PORT=1883
 POLZA_API_KEY=replace_with_your_polza_api_key
 AI_MODEL=gpt-5-nano
 POLZA_BASE_URL=https://polza.ai/api/v1/chat/completions
 ```
 
-Текущие настройки выполнения:
+Что это означает:
+
+- `BROKER_HOST=127.0.0.1` - локальный MQTT-брокер на текущем компьютере.
+- `BROKER_PORT=1883` - стандартный MQTT-порт.
+- Для сервера можно указать внешний адрес, например изменить `BROKER_HOST` на DNS-имя или IP нужного брокера.
+
+Остальные настройки выполнения:
 
 - SQLite-БД создаётся автоматически по пути `backend/farm.db`.
-- MQTT-брокер сейчас задан в `backend/main.py` и `sim_esp32.py` как `31.56.208.196:1883`.
 - Backend запускается на порту `8000`.
 - Frontend запускается на порту `5174`.
-
-Если нужен другой MQTT-брокер, измените `BROKER_HOST` и `BROKER_PORT` одновременно в `backend/main.py` и `sim_esp32.py`.
 
 ## Запуск проекта
 
@@ -160,6 +169,5 @@ npm run dev -- --host 0.0.0.0 --port 5174
 
 ## Примечания
 
-- Не коммитьте `backend/.env`, `backend/farm.db`, виртуальное окружение, логи и `node_modules/`.
 - Симулятор поддерживает режимы `NORMAL`, `HEAT` и `COLD` через MQTT-топик `farm/sim/control`.
 - Команды устройствам публикуются в топики вида `farm/tray_1/cmd/{pump|light|fan}`.

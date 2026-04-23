@@ -1,11 +1,14 @@
 import json
+import os
 import random
 import time
-import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 import paho.mqtt.client as mqtt
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 BROKER_HOST = os.getenv("BROKER_HOST", "127.0.0.1")
 BROKER_PORT = int(os.getenv("BROKER_PORT", "1883"))
