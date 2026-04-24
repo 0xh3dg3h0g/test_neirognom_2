@@ -13,7 +13,9 @@ import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from openai import AsyncOpenAI
 from pydantic import BaseModel
+from tools import TOOLS_SCHEMA, get_current_metrics, get_history, get_crop_rules
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR.parent / ".env")
@@ -23,6 +25,10 @@ BROKER_HOST = os.getenv("BROKER_HOST", "127.0.0.1")
 BROKER_PORT = int(os.getenv("BROKER_PORT", "1883"))
 SENSORS_TOPIC = "farm/+/sensors/#"
 POLZA_API_KEY = os.getenv("POLZA_API_KEY")
+client = AsyncOpenAI(
+    api_key=POLZA_API_KEY,
+    base_url="https://polza.ai/api/v1"
+)
 AI_MODEL = os.getenv("AI_MODEL", "gpt-5-nano")
 POLZA_BASE_URL = os.getenv("POLZA_BASE_URL", "https://polza.ai/api/v1/chat/completions")
 KNOWN_SENSOR_TOPICS = {
@@ -67,6 +73,7 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON telemetry(timestamp);")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS ai_logs (
@@ -78,6 +85,22 @@ def init_db() -> None:
             """
         )
         connection.commit()
+
+    crops_data_dir = BASE_DIR / "crops_data"
+    crops_data_dir.mkdir(exist_ok=True)
+    tomatoes_file = crops_data_dir / "tomatoes.md"
+    if not tomatoes_file.exists():
+        tomatoes_file.write_text(
+            """# Томаты (Черри) - АгроТехКарта
+- Оптимальная температура: 22-26°C
+- Оптимальная влажность: 60-75%
+- Оптимальная температура воды: 18-22°C
+- Требуемый pH: 5.5-6.5
+- Требуемый EC: 2.0-2.5
+Внимание: при падении температуры ниже 18°C рост замедляется.
+""",
+            encoding="utf-8",
+        )
 
 def current_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -291,42 +314,59 @@ def format_telemetry_records_russian(records: list[dict[str, Any]]) -> str:
     return "\n".join(formatted) if formatted else "Нет данных с датчиков"
 
 
-async def ask_ai(system_prompt: str, user_prompt: str) -> str:
-    if not POLZA_API_KEY:
-        raise RuntimeError("Не задан POLZA_API_KEY")
-    if not POLZA_BASE_URL:
-        raise RuntimeError("Не задан POLZA_BASE_URL")
-    if not AI_MODEL:
-        raise RuntimeError("Не задан AI_MODEL")
+async def ask_ai(system_prompt: str, user_prompt: str, message_history: list = None) -> str:
+    # Собираем контекст сообщений
+    messages = [{"role": "system", "content": system_prompt}]
+    if message_history:
+        messages.extend(message_history)
+    messages.append({"role": "user", "content": user_prompt})
 
-    payload = {
-        "model": AI_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    }
-    headers = {
-        "Authorization": f"Bearer {POLZA_API_KEY}",
-        "Content-Type": "application/json",
-    }
+    model_name = os.getenv("AI_MODEL", "gpt-5.4-mini")
 
-    async with httpx.AsyncClient(timeout=40.0) as client:
-        response = await client.post(POLZA_BASE_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        response_json = response.json()
+    # Цикл агента (максимум 5 шагов, чтобы избежать бесконечного зацикливания)
+    for _ in range(5):
+        try:
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=TOOLS_SCHEMA,
+                tool_choice="auto",
+                temperature=0.2
+            )
 
-    choices = response_json.get("choices", [])
-    if not choices:
-        raise RuntimeError("AI не вернул choices")
+            message = response.choices[0].message
+            messages.append(message) # Добавляем ответ модели в историю
 
-    message = choices[0].get("message", {})
-    content = message.get("content", "")
-    if isinstance(content, list):
-        text_parts = [str(item.get("text", "")) for item in content if isinstance(item, dict)]
-        content = "".join(text_parts)
+            # Если ИИ не вызывает функции, значит это финальный текстовый ответ
+            if not message.tool_calls:
+                return message.content
 
-    return strip_markdown_backticks(str(content))
+            # Если ИИ хочет вызвать функции, выполняем их
+            for tool_call in message.tool_calls:
+                func_name = tool_call.function.name
+                args = json.loads(tool_call.function.arguments)
+
+                if func_name == "get_current_metrics":
+                    result = get_current_metrics()
+                elif func_name == "get_history":
+                    result = get_history(args.get("metric_name"), args.get("hours", 24))
+                elif func_name == "get_crop_rules":
+                    result = get_crop_rules(args.get("crop_name"))
+                else:
+                    result = {"error": f"Неизвестная функция {func_name}"}
+
+                # Добавляем результат функции в историю сообщений
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": func_name,
+                    "content": json.dumps(result, ensure_ascii=False)
+                })
+
+        except Exception as e:
+            return f"Ошибка при обращении к ИИ: {str(e)}"
+
+    return "Я слишком долго думал над этим вопросом и запутался. Пожалуйста, переформулируйте."
 
 
 def build_decision_ai_request(records: list[dict[str, Any]]) -> tuple[str, str]:
@@ -591,8 +631,7 @@ class DeviceControlRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
-    history: list[dict[str, str]] | None = None
+    messages: list
 
 
 @app.get("/")
@@ -703,10 +742,11 @@ def get_logs(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any
 @app.post("/api/chat")
 @app.post("/api/ai/chat")
 async def chat_with_ai(request: ChatRequest) -> dict[str, str]:
-    user_prompt = await asyncio.to_thread(build_chat_prompt, request.message, request.history)
+    user_prompt = request.messages[-1]["content"]
+    history = request.messages[:-1]
 
     try:
-        reply = await ask_ai(CHAT_SYSTEM_PROMPT, user_prompt)
+        reply = await ask_ai(CHAT_SYSTEM_PROMPT, user_prompt, history)
     except Exception as exc:
         return {"reply": f"Не удалось получить ответ от AI: {exc}"}
 
