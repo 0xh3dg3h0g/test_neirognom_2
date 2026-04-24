@@ -69,7 +69,7 @@ function toNumberOrFallback(value, fallback) {
 function buildChatHistory(messages, userMessage) {
   return [...messages, userMessage].map((message) => ({
     role: message.from === 'assistant' ? 'assistant' : 'user',
-    text: message.text,
+    content: message.text,
   }))
 }
 
@@ -332,8 +332,7 @@ export default function App() {
       const data = await requestJson('/api/chat', {
         method: 'POST',
         body: JSON.stringify({
-          message: text,
-          history: buildChatHistory(messages, userMessage),
+          messages: buildChatHistory(messages, userMessage),
         }),
       })
 
