@@ -65,14 +65,15 @@ CHAT_SYSTEM_PROMPT = (
     "(например, температура воздуха выше 28 градусов или влажность ниже 50%) — мягко предупреди об опасности и дай совет.\n"
     "4. Агро-энциклопедия: Если спрашивают, как выращивать конкретную культуру, выдай базовые "
     "требования. Если текущие показатели фермы подходят под эти требования — можешь порадоваться этому.\n"
-    "5. Ограничения языка: Отвечай ИСКЛЮЧИТЕЛЬНО на русском языке. КАТЕГОРИЧЕСКИ запрещено использовать английские слова. "
-    "Запрещено использовать любые странные символы, программный код, теги или markdown-разметку. Пиши чистым, обычным текстом."
+    "5. Ограничения языка: Отвечай на русском языке. Обозначения pH и EC разрешены. "
+    "Английские slug-названия культур можно использовать, если пользователь сам их написал или если это нужно для точности. "
+    "Запрещено использовать программный код, теги или markdown-разметку. Пиши чистым, обычным текстом."
 )
 
 CROP_ALIASES: dict[str, tuple[str, ...]] = {
     "basil": ("basil", "базилик"),
     "arugula": ("arugula", "руккола", "рукола"),
-    "lettuce": ("lettuce", "латук", "салат"),
+    "lettuce": ("lettuce", "латук", "салат латук", "листовой салат", "салат"),
     "spinach": ("spinach", "шпинат"),
     "cilantro": ("cilantro", "кинза", "кориандр"),
     "parsley": ("parsley", "петрушка"),
@@ -80,6 +81,7 @@ CROP_ALIASES: dict[str, tuple[str, ...]] = {
     "dill": ("dill", "укроп"),
     "pak_choi": ("pak_choi", "pak choi", "pak-choi", "пак-чой", "пак чой"),
     "chard": ("chard", "мангольд"),
+    # Корнеплодный редис и полноценный горох не подменяем микрозеленью.
     "microgreen_radish": (
         "microgreen_radish",
         "microgreen radish",
@@ -91,7 +93,8 @@ CROP_ALIASES: dict[str, tuple[str, ...]] = {
         "microgreen pea",
         "микрозелень гороха",
         "гороховая микрозелень",
-        "горох",
+        "гороховые побеги",
+        "побеги гороха",
     ),
 }
 
@@ -113,7 +116,7 @@ def detect_crops_in_message(message: str) -> list[str]:
 
 def is_root_radish_question(message: str) -> bool:
     normalized_message = message.lower().replace("ё", "е")
-    asks_about_radish = re.search(r"(?<![\w])редис(?![\w])", normalized_message, re.IGNORECASE)
+    asks_about_radish = re.search(r"(?<![\w])редис[а-я]*(?![\w])", normalized_message, re.IGNORECASE)
     asks_about_microgreen = re.search(
         r"микрозелень\s+редиса|редисная\s+микрозелень",
         normalized_message,
@@ -122,17 +125,39 @@ def is_root_radish_question(message: str) -> bool:
     return bool(asks_about_radish and not asks_about_microgreen)
 
 
+def is_regular_pea_question(message: str) -> bool:
+    normalized_message = message.lower().replace("ё", "е")
+    asks_about_pea = re.search(r"(?<![\w])горох[а-я]*(?![\w])", normalized_message, re.IGNORECASE)
+    asks_about_microgreen_or_shoots = re.search(
+        r"микрозелень\s+гороха|гороховая\s+микрозелень|гороховые\s+побеги|побеги\s+гороха|побег",
+        normalized_message,
+        re.IGNORECASE,
+    )
+    return bool(asks_about_pea and not asks_about_microgreen_or_shoots)
+
+
 def build_unsupported_crop_context(message: str) -> str:
-    if not is_root_radish_question(message):
+    notes: list[str] = []
+
+    if is_root_radish_question(message):
+        notes.append(
+            "Корнеплодный редис не является базовой культурой маленькой сити-фермы "
+            "в текущей crops_data. Не выдавай его нормы как нормы microgreen_radish. "
+            "Объясни пользователю, что вместо корнеплодного редиса в этой установке "
+            "поддерживается микрозелень редиса."
+        )
+    if is_regular_pea_question(message):
+        notes.append(
+            "Полноценный горох не является базовой культурой маленькой сити-фермы "
+            "в текущей crops_data. Не выдавай его нормы как нормы microgreen_pea. "
+            "Объясни пользователю, что в этой установке можно выращивать микрозелень "
+            "или побеги гороха."
+        )
+
+    if not notes:
         return ""
 
-    return (
-        "Ограничение базы культур: корнеплодный редис не является базовой культурой "
-        "маленькой сити-фермы в текущей crops_data. Не выдавай его нормы как нормы "
-        "microgreen_radish. Объясни пользователю, что вместо корнеплодного редиса "
-        "в этой установке поддерживается микрозелень редиса, и при необходимости "
-        "можно дать рекомендации именно по микрозелени редиса."
-    )
+    return "Ограничение базы культур:\n" + "\n".join(f"- {note}" for note in notes)
 
 
 def build_crop_rules_context(crops: list[str]) -> str:
@@ -941,6 +966,7 @@ async def chat_with_ai(request: ChatRequest) -> dict[str, Any]:
         analysis_steps.append("Загружаю базу знаний культур из crops_data")
         enriched_prompt = f"{crop_rules_context}\n\n{enriched_prompt}"
     if unsupported_crop_context:
+        analysis_steps.append("Проверяю ограничения по неподходящим культурам")
         enriched_prompt = f"{unsupported_crop_context}\n\n{enriched_prompt}"
 
     try:

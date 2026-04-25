@@ -9,6 +9,60 @@ BASE_DIR = Path(__file__).resolve().parent
 CROPS_DIR = BASE_DIR / "crops_data"
 CLIMATE_TOPIC = "farm/tray_1/sensors/climate"
 WATER_TOPIC = "farm/tray_1/sensors/water"
+CROP_NAME_ALIASES: dict[str, str] = {
+    "basil": "basil",
+    "базилик": "basil",
+    "arugula": "arugula",
+    "руккола": "arugula",
+    "рукола": "arugula",
+    "lettuce": "lettuce",
+    "латук": "lettuce",
+    "салат латук": "lettuce",
+    "листовой салат": "lettuce",
+    "салат": "lettuce",
+    "spinach": "spinach",
+    "шпинат": "spinach",
+    "cilantro": "cilantro",
+    "кинза": "cilantro",
+    "кориандр": "cilantro",
+    "parsley": "parsley",
+    "петрушка": "parsley",
+    "mint": "mint",
+    "мята": "mint",
+    "dill": "dill",
+    "укроп": "dill",
+    "pak_choi": "pak_choi",
+    "pak choi": "pak_choi",
+    "pak-choi": "pak_choi",
+    "пак-чой": "pak_choi",
+    "пак чой": "pak_choi",
+    "chard": "chard",
+    "мангольд": "chard",
+    "microgreen_radish": "microgreen_radish",
+    "microgreen radish": "microgreen_radish",
+    "микрозелень редиса": "microgreen_radish",
+    "редисная микрозелень": "microgreen_radish",
+    "microgreen_pea": "microgreen_pea",
+    "microgreen pea": "microgreen_pea",
+    "микрозелень гороха": "microgreen_pea",
+    "гороховая микрозелень": "microgreen_pea",
+    "гороховые побеги": "microgreen_pea",
+    "побеги гороха": "microgreen_pea",
+}
+
+
+def normalize_crop_name(crop_name) -> str:
+    normalized = str(crop_name or "").strip().lower().replace("ё", "е")
+    normalized = normalized.replace("_", " ")
+    normalized = " ".join(normalized.replace("-", " ").split())
+
+    for alias, slug in CROP_NAME_ALIASES.items():
+        normalized_alias = alias.lower().replace("ё", "е").replace("_", " ")
+        normalized_alias = " ".join(normalized_alias.replace("-", " ").split())
+        if normalized == normalized_alias:
+            return slug
+
+    return "".join(c for c in str(crop_name or "") if c.isalnum() or c in (" ", "-", "_")).strip()
 
 
 def get_current_metrics() -> dict[str, Any]:
@@ -33,8 +87,7 @@ def get_history(metric_name, hours=24) -> dict[str, str] | list[dict[str, Any]]:
 
 def get_crop_rules(crop_name):
     """Читает правила выращивания культуры из Markdown файла."""
-    # Защита от выхода из директории
-    safe_name = "".join(c for c in str(crop_name or "") if c.isalnum() or c in (" ", "-", "_")).strip()
+    safe_name = normalize_crop_name(crop_name)
     file_path = CROPS_DIR / f"{safe_name}.md"
 
     if not file_path.exists():
