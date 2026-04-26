@@ -1,9 +1,9 @@
 import GlassCard from './GlassCard'
 import { BrainIcon } from './Icons'
 
-export default function ThoughtStream({ thoughts }) {
+export default function ThoughtStream({ thoughts, className = '' }) {
   return (
-    <GlassCard className="flex h-full min-h-0 flex-col rounded-[28px]">
+    <GlassCard className={`flex h-full min-h-0 min-w-0 max-w-full flex-col rounded-[28px] ${className}`}>
       <div className="flex items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-[18px] border border-white/10 bg-violet-400/14 text-violet-200">
           <BrainIcon className="h-5 w-5" />

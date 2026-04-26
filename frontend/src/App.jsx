@@ -15,6 +15,7 @@ import {
   FanIcon,
   HumidityIcon,
   LightIcon,
+  PlayIcon,
   PumpIcon,
   SlidersIcon,
   ThermometerIcon,
@@ -26,6 +27,38 @@ const API_BASE_URL =
     : `${window.location.protocol}//${window.location.hostname}:8000`
 const TELEMETRY_POLL_INTERVAL_MS = 2000
 const LOGS_POLL_INTERVAL_MS = 5000
+const DEFAULT_TRAY_ID = 'tray_1'
+
+const FALLBACK_CROPS = [
+  { slug: 'basil', name_ru: 'Базилик', crop_type: 'herb', version_label: 'v1.0' },
+  { slug: 'lettuce', name_ru: 'Салат', crop_type: 'leafy', version_label: 'v1.0' },
+  { slug: 'arugula', name_ru: 'Руккола', crop_type: 'leafy', version_label: 'v1.0' },
+  { slug: 'spinach', name_ru: 'Шпинат', crop_type: 'leafy', version_label: 'v1.0' },
+  { slug: 'cilantro', name_ru: 'Кинза', crop_type: 'herb', version_label: 'v1.0' },
+  { slug: 'mangold', name_ru: 'Мангольд', crop_type: 'leafy', version_label: 'v1.0' },
+  { slug: 'microgreen_radish', name_ru: 'Микрозелень редиса', crop_type: 'microgreen', version_label: 'v1.0' },
+  { slug: 'microgreen_pea', name_ru: 'Микрозелень гороха', crop_type: 'microgreen', version_label: 'v1.0' },
+  { slug: 'dill', name_ru: 'Укроп', crop_type: 'herb', version_label: 'v1.0' },
+  { slug: 'mint', name_ru: 'Мята', crop_type: 'herb', version_label: 'v1.0' },
+  { slug: 'pak_choi', name_ru: 'Пак-чой', crop_type: 'leafy', version_label: 'v1.0' },
+  { slug: 'parsley', name_ru: 'Петрушка', crop_type: 'herb', version_label: 'v1.0' },
+]
+
+const CROP_VISUALS = {
+  basil: { label: 'Базилик', emoji: '🌿', gradient: 'from-emerald-300/24 via-green-500/14 to-emerald-950/20' },
+  lettuce: { label: 'Салат', emoji: '🥬', gradient: 'from-lime-300/22 via-green-500/12 to-slate-900/20' },
+  arugula: { label: 'Руккола', emoji: '☘️', gradient: 'from-green-300/18 via-emerald-500/12 to-slate-900/20' },
+  spinach: { label: 'Шпинат', emoji: '🍃', gradient: 'from-green-300/20 via-emerald-500/12 to-slate-950/20' },
+  cilantro: { label: 'Кинза', emoji: '🌱', gradient: 'from-emerald-200/20 via-lime-500/12 to-slate-950/20' },
+  chard: { label: 'Мангольд', emoji: '🌾', gradient: 'from-rose-300/16 via-emerald-400/12 to-slate-950/20' },
+  mangold: { label: 'Мангольд', emoji: '🌾', gradient: 'from-rose-300/16 via-emerald-400/12 to-slate-950/20' },
+  microgreen_radish: { label: 'Микрозелень редиса', emoji: '🌱', gradient: 'from-fuchsia-300/18 via-emerald-400/12 to-slate-900/20' },
+  microgreen_pea: { label: 'Микрозелень гороха', emoji: '🌿', gradient: 'from-lime-300/18 via-emerald-400/12 to-slate-900/20' },
+  dill: { label: 'Укроп', emoji: '🌿', gradient: 'from-green-200/18 via-lime-500/12 to-slate-950/20' },
+  mint: { label: 'Мята', emoji: '🍃', gradient: 'from-cyan-200/16 via-emerald-400/12 to-slate-950/20' },
+  pak_choi: { label: 'Пак-чой', emoji: '🥬', gradient: 'from-lime-200/18 via-green-500/12 to-slate-950/20' },
+  parsley: { label: 'Петрушка', emoji: '☘️', gradient: 'from-emerald-200/16 via-green-500/12 to-slate-950/20' },
+}
 
 const CHAT_THINKING_STEPS = [
   'Получен запрос пользователя',
@@ -92,7 +125,16 @@ async function requestJson(path, options = {}) {
   })
 
   if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`)
+    let detail = null
+    try {
+      detail = await response.json()
+    } catch {
+      detail = null
+    }
+    const error = new Error(`Request failed with status ${response.status}`)
+    error.status = response.status
+    error.detail = detail
+    throw error
   }
 
   return response.json()
@@ -112,6 +154,35 @@ function parseLogMeta(entry) {
   }
 }
 
+function getCropLabel(crop) {
+  if (!crop) return 'Культура'
+  return crop.name_ru || crop.crop_name_ru || CROP_VISUALS[crop.slug]?.label || crop.slug
+}
+
+function normalizeCrop(crop) {
+  const slug = crop.slug || crop.crop_slug
+  return {
+    ...crop,
+    slug,
+    name_ru: crop.name_ru || crop.crop_name_ru || CROP_VISUALS[slug]?.label || slug,
+    version_label: crop.version_label || 'v1.0',
+  }
+}
+
+function getCropVisual(slug) {
+  return CROP_VISUALS[slug] || {
+    label: slug,
+    emoji: (slug || '?').slice(0, 1).toUpperCase(),
+    gradient: 'from-emerald-300/18 via-slate-400/10 to-slate-950/20',
+  }
+}
+
+function getErrorMessage(error, fallback) {
+  if (typeof error?.detail?.detail?.error === 'string') return error.detail.detail.error
+  if (typeof error?.detail?.error === 'string') return error.detail.error
+  return fallback
+}
+
 export default function App() {
   const [mode, setMode] = useState('monitoring')
   const [metrics, setMetrics] = useState({ waterTemp: 0, airHumidity: 0, airTemp: 0 })
@@ -129,6 +200,11 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState(formatDate())
   const [activeLedStage, setActiveLedStage] = useState(5)
   const [isLedPlaying, setIsLedPlaying] = useState(false)
+  const [crops, setCrops] = useState(FALLBACK_CROPS)
+  const [selectedCropSlug, setSelectedCropSlug] = useState('basil')
+  const [currentCycle, setCurrentCycle] = useState(null)
+  const [isCycleLoading, setIsCycleLoading] = useState(false)
+  const [cycleError, setCycleError] = useState('')
 
   const pushThought = (text) => {
     const item = {
@@ -230,6 +306,53 @@ export default function App() {
     }
   }, [])
 
+  const loadCurrentCycle = async () => {
+    const data = await requestJson(`/api/cycles/current?tray_id=${DEFAULT_TRAY_ID}`)
+    setCurrentCycle(data || null)
+    return data
+  }
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadCycleData = async () => {
+      setIsCycleLoading(true)
+      try {
+        const [cropsData, cycleData] = await Promise.all([
+          requestJson('/api/crops'),
+          requestJson(`/api/cycles/current?tray_id=${DEFAULT_TRAY_ID}`),
+        ])
+
+        if (!isMounted) return
+
+        const normalizedCrops = Array.isArray(cropsData) && cropsData.length
+          ? cropsData.map(normalizeCrop)
+          : FALLBACK_CROPS
+        setCrops(normalizedCrops)
+        setSelectedCropSlug((prev) => (
+          normalizedCrops.some((crop) => crop.slug === prev) ? prev : normalizedCrops[0]?.slug || 'basil'
+        ))
+        setCurrentCycle(cycleData || null)
+        setCycleError('')
+      } catch (error) {
+        console.error('Failed to load cycle data', error)
+        if (!isMounted) return
+
+        setCrops(FALLBACK_CROPS)
+        setSelectedCropSlug((prev) => prev || FALLBACK_CROPS[0].slug)
+        setCycleError('Не удалось загрузить данные цикла. Показаны доступные культуры по умолчанию.')
+      } finally {
+        if (isMounted) setIsCycleLoading(false)
+      }
+    }
+
+    loadCycleData()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
   useEffect(() => {
     if (!isLedPlaying) return undefined
 
@@ -289,6 +412,38 @@ export default function App() {
     [metrics],
   )
 
+  const selectedCrop = useMemo(
+    () => crops.find((crop) => crop.slug === selectedCropSlug) || crops[0] || FALLBACK_CROPS[0],
+    [crops, selectedCropSlug],
+  )
+
+  const manualDevices = useMemo(
+    () => [
+      {
+        key: 'fans',
+        title: 'Вентиляция',
+        statusText: devices.fans.enabled ? 'Состояние: включено' : 'Состояние: выключено',
+        icon: <FanIcon className="h-6 w-6" />,
+        accent: '#75F08D',
+      },
+      {
+        key: 'lights',
+        title: 'Освещение',
+        statusText: devices.lights.enabled ? 'Состояние: включено' : 'Состояние: выключено',
+        icon: <LightIcon className="h-6 w-6" />,
+        accent: '#FFD667',
+      },
+      {
+        key: 'pumps',
+        title: 'Полив',
+        statusText: devices.pumps.enabled ? 'Состояние: включено' : 'Состояние: выключено',
+        icon: <PumpIcon className="h-6 w-6" />,
+        accent: '#8EC8FF',
+      },
+    ],
+    [devices],
+  )
+
   const handleToggle = (key) => async (enabled) => {
     const deviceType = {
       fans: 'fan',
@@ -333,14 +488,64 @@ export default function App() {
     }
   }
 
-  const handleRange = (key, value) => {
-    setDevices((prev) => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        level: Number(value),
-      },
-    }))
+  const handleStartCycle = async () => {
+    if (!selectedCropSlug || currentCycle) return
+
+    setIsCycleLoading(true)
+    setCycleError('')
+    try {
+      const cycle = await requestJson('/api/cycles/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          crop_slug: selectedCropSlug,
+          tray_id: DEFAULT_TRAY_ID,
+        }),
+      })
+      setCurrentCycle(cycle)
+      pushThought(`Цикл выращивания запущен: ${getCropLabel(selectedCrop)}.`)
+    } catch (error) {
+      console.error('Failed to start growing cycle', error)
+      if (error.status === 409) {
+        setCycleError('Цикл уже запущен')
+        try {
+          await loadCurrentCycle()
+        } catch (loadError) {
+          console.error('Failed to refresh current cycle after conflict', loadError)
+        }
+      } else {
+        setCycleError(getErrorMessage(error, 'Не удалось запустить цикл. Проверьте backend.'))
+      }
+    } finally {
+      setIsCycleLoading(false)
+    }
+  }
+
+  const handleFinishCycle = async () => {
+    if (!currentCycle) return
+
+    setIsCycleLoading(true)
+    setCycleError('')
+    try {
+      await requestJson('/api/cycles/end', {
+        method: 'POST',
+        body: JSON.stringify({
+          tray_id: DEFAULT_TRAY_ID,
+        }),
+      })
+      setCurrentCycle(null)
+      await loadCurrentCycle()
+      pushThought('Цикл выращивания завершён.')
+    } catch (error) {
+      console.error('Failed to finish growing cycle', error)
+      setCycleError(getErrorMessage(error, 'Не удалось завершить цикл. Активный цикл не найден.'))
+      try {
+        await loadCurrentCycle()
+      } catch (loadError) {
+        console.error('Failed to refresh current cycle after end error', loadError)
+      }
+    } finally {
+      setIsCycleLoading(false)
+    }
   }
 
   const handleSendMessage = async () => {
@@ -377,63 +582,191 @@ export default function App() {
     }
   }
 
-  const renderMonitoring = () => (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <GlassCard className="rounded-[28px] shrink-0">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Мониторинг</div>
-            <p className="mt-1.5 text-sm text-white/62">Основные параметры фермы в реальном времени.</p>
+  const renderCropCard = (crop) => {
+    const visual = getCropVisual(crop.slug)
+    const isSelected = selectedCropSlug === crop.slug
+
+    return (
+      <button
+        key={crop.slug}
+        type="button"
+        onClick={() => {
+          setSelectedCropSlug(crop.slug)
+          setCycleError('')
+        }}
+        className={`relative min-h-[96px] max-w-full overflow-hidden rounded-[20px] border p-3 text-left transition duration-200 sm:min-h-[108px] ${
+          isSelected
+            ? 'border-emerald-300/80 bg-emerald-400/10 shadow-[0_0_28px_rgba(52,211,153,0.20)]'
+            : 'border-white/8 bg-white/[0.045] hover:border-white/18 hover:bg-white/[0.065]'
+        }`}
+      >
+        <div className={`absolute inset-0 bg-gradient-to-br ${visual.gradient}`} />
+        <div className="relative flex h-full min-w-0 flex-col items-center justify-center gap-2">
+          <div className="text-[34px] leading-none drop-shadow-[0_0_22px_rgba(52,211,153,0.28)] sm:text-[40px]">
+            {visual.emoji}
+          </div>
+          <div className="max-w-full truncate text-center text-[13px] font-semibold leading-tight text-white sm:text-[14px]">
+            {getCropLabel(crop)}
           </div>
         </div>
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {metricsList.map((item) => (
-            <MetricCard key={item.title} {...item} />
-          ))}
+        {isSelected ? (
+          <div className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-emerald-300 text-slate-950 shadow-[0_0_18px_rgba(52,211,153,0.45)]">
+            ✓
+          </div>
+        ) : null}
+      </button>
+    )
+  }
+
+  const renderCycleControl = () => {
+    const activeCropName = currentCycle?.crop_name_ru || getCropLabel(selectedCrop)
+    const activeVersion = currentCycle?.version_label || selectedCrop?.version_label || 'v1.0'
+    const isActive = Boolean(currentCycle)
+
+    return (
+      <GlassCard className="flex min-h-0 max-w-full flex-col rounded-[28px] min-[1700px]:h-full min-[1700px]:overflow-hidden">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Управление циклом</div>
+            <p className="mt-1.5 max-w-2xl text-sm text-white/62">
+              {isActive ? 'Текущий цикл выращивания закреплён за лотком.' : 'Выберите культуру и запустите новый цикл выращивания.'}
+            </p>
+          </div>
+          <div className={`rounded-full border px-4 py-2 text-sm ${isActive ? 'border-emerald-300/30 bg-emerald-400/12 text-emerald-200' : 'border-white/10 bg-white/6 text-white/68'}`}>
+            {isActive ? 'Активный цикл' : 'Цикл не запущен'}
+          </div>
+        </div>
+
+        {cycleError ? (
+          <div className="mt-4 rounded-[18px] border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+            {cycleError}
+          </div>
+        ) : null}
+
+        <div className={`mt-5 grid max-w-full grid-cols-1 gap-4 min-[1700px]:min-h-0 min-[1700px]:flex-1 ${isActive ? 'min-[1700px]:grid-cols-[minmax(0,0.75fr)_minmax(280px,0.9fr)]' : 'min-[1700px]:grid-cols-[minmax(260px,0.9fr)_minmax(300px,1fr)]'}`}>
+          {!isActive ? (
+            <div className="min-w-0 max-w-full rounded-[26px] border border-white/8 bg-white/[0.035] p-4">
+              <div className="mb-4 text-lg font-semibold text-white">Выбор культуры</div>
+              <div className="custom-scrollbar max-h-[260px] overflow-y-auto overflow-x-hidden pr-2 sm:max-h-[300px] min-[1700px]:max-h-[300px]">
+                <div className="grid grid-cols-2 gap-3 max-[360px]:grid-cols-1">
+                  {crops.map(renderCropCard)}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="min-w-0 max-w-full rounded-[26px] border border-emerald-300/16 bg-emerald-400/[0.045] p-5">
+              <div className="flex h-full min-h-[260px] flex-col justify-between gap-6">
+                <div className="min-w-0">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1 text-sm text-emerald-200">
+                    <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                    Активный цикл
+                  </div>
+                  <div className="mt-6 max-w-full truncate text-[30px] font-semibold leading-tight text-white">{activeCropName}</div>
+                  <p className="mt-2 text-sm text-white/58">Статус: active / в норме</p>
+                </div>
+                <button
+                  type="button"
+                  disabled
+                  className="w-full rounded-[18px] border border-white/8 bg-white/[0.04] px-5 py-4 text-sm font-semibold text-white/42"
+                >
+                  Цикл уже запущен
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="min-w-0 max-w-full rounded-[26px] border border-white/8 bg-white/[0.035] p-4 sm:p-5">
+            <div className="flex min-h-[260px] flex-col min-[1700px]:h-full min-[1700px]:min-h-0">
+              <div>
+                <div className="text-lg font-semibold text-white">{isActive ? 'Параметры цикла' : 'Предпросмотр цикла'}</div>
+                <p className="mt-1 text-sm text-white/58">
+                  {isActive ? 'Цикл выполняется по активной агротехкарте.' : 'Проверьте параметры и подтвердите запуск.'}
+                </p>
+              </div>
+
+              <div className="mt-5 grid min-w-0 flex-1 items-center gap-5 md:grid-cols-[112px_minmax(0,1fr)]">
+                <div className={`mx-auto flex aspect-square w-[112px] items-center justify-center rounded-[28px] border border-emerald-300/18 bg-gradient-to-br ${getCropVisual(currentCycle?.crop_slug || selectedCrop?.slug).gradient} text-[58px] shadow-[0_0_34px_rgba(52,211,153,0.10)]`}>
+                  {getCropVisual(currentCycle?.crop_slug || selectedCrop?.slug).emoji}
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="min-w-0 max-w-full truncate text-[24px] font-semibold leading-tight text-white md:text-[28px]">{activeCropName}</div>
+                    {isActive ? (
+                      <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1 text-sm text-emerald-200">
+                        в норме
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-5 divide-y divide-white/8">
+                    {[
+                      ['Агротехкарта', activeVersion],
+                      ['День цикла', currentCycle?.day_number || 1],
+                      ['Лоток', currentCycle?.tray_id || DEFAULT_TRAY_ID],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex items-center justify-between gap-4 py-3 text-sm">
+                        <span className="text-white/54">{label}</span>
+                        <span className="font-semibold text-white/88">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_140px]">
+                {!isActive ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleStartCycle}
+                      disabled={isCycleLoading}
+                      className="inline-flex min-h-[56px] items-center justify-center gap-3 rounded-[20px] border border-violet-200/30 bg-gradient-to-r from-violet-500 to-fuchsia-600 px-5 py-3 font-semibold text-white shadow-[0_0_28px_rgba(168,85,247,0.28)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                      <PlayIcon className="h-4 w-4" />
+                      {isCycleLoading ? 'Запуск...' : 'Подтвердить запуск'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCycleError('')
+                        setSelectedCropSlug(crops[0]?.slug || 'basil')
+                      }}
+                      className="min-h-[56px] rounded-[20px] border border-white/10 bg-white/[0.035] px-5 py-3 font-semibold text-white/72 transition hover:bg-white/[0.065]"
+                    >
+                      Отмена
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleFinishCycle}
+                    disabled={isCycleLoading}
+                    className="min-h-[56px] rounded-[20px] border border-rose-200/20 bg-rose-500/16 px-5 py-3 font-semibold text-rose-100 transition hover:bg-rose-500/22 disabled:cursor-not-allowed disabled:opacity-55 sm:col-span-2"
+                  >
+                    {isCycleLoading ? 'Завершение...' : 'Закончить цикл'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </GlassCard>
+    )
+  }
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <GlassCard className="flex min-h-0 flex-col overflow-hidden rounded-[28px]">
-          <div className="flex shrink-0 items-center justify-between xl:gap-3">
-            <div>
-              <div className="text-[22px] font-semibold tracking-tight md:text-[24px] xl:text-[22px] 2xl:text-[24px]">Устройства</div>
-              <p className="mt-1.5 text-sm text-white/62 xl:mt-1 xl:text-[13px] 2xl:mt-1.5 2xl:text-sm">Быстрый доступ к ключевым системам.</p>
-            </div>
-            <SlidersIcon className="h-6 w-6 text-white/20" />
-          </div>
-          <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3 items-start content-start auto-rows-max overflow-hidden">
-            <DeviceCard
-              title={devices.fans.title}
-              subtitle={devices.fans.subtitle}
-              level={devices.fans.level}
-              enabled={devices.fans.enabled}
-              onToggle={handleToggle('fans')}
-              icon={<FanIcon className="h-6 w-6" />}
-              accent="#75F08D"
-            />
-            <DeviceCard
-              title={devices.lights.title}
-              subtitle={devices.lights.subtitle}
-              level={devices.lights.level}
-              enabled={devices.lights.enabled}
-              onToggle={handleToggle('lights')}
-              icon={<LightIcon className="h-6 w-6" />}
-              accent="#FFD667"
-            />
-            <DeviceCard
-              title={devices.pumps.title}
-              subtitle={devices.pumps.subtitle}
-              level={devices.pumps.level}
-              enabled={devices.pumps.enabled}
-              onToggle={handleToggle('pumps')}
-              icon={<PumpIcon className="h-6 w-6" />}
-              accent="#8EC8FF"
-            />
-          </div>
-        </GlassCard>
+  const renderMonitoring = () => (
+    <div className="flex min-w-0 max-w-full flex-col gap-4 min-[1700px]:h-full min-[1700px]:min-h-0">
+      <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {metricsList.map((item) => (
+          <MetricCard key={item.title} {...item} />
+        ))}
+      </div>
 
-        <div className="min-h-0">
+      <div className="grid min-w-0 grid-cols-1 gap-4 min-[1700px]:min-h-0 min-[1700px]:flex-1 min-[1700px]:grid-cols-[minmax(0,1fr)_330px] min-[1900px]:grid-cols-[minmax(0,1fr)_360px]">
+        {renderCycleControl()}
+
+        <div className="min-h-[320px] min-w-0 min-[1700px]:min-h-0">
           <ThoughtStream thoughts={thoughts} className="h-full" />
         </div>
       </div>
@@ -441,53 +774,29 @@ export default function App() {
   )
 
   const renderManual = () => (
-    <div className="grid h-full min-h-0 gap-4 xl:grid-rows-[auto_minmax(0,1fr)]">
+    <div className="grid min-w-0 max-w-full gap-4 min-[1700px]:h-full min-[1700px]:min-h-0 min-[1700px]:grid-rows-[auto_minmax(0,1fr)]">
       <GlassCard className="rounded-[28px]">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/8 text-white/90">
-            <SlidersIcon className="h-5 w-5" />
-          </div>
+        <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Ручное управление</div>
+            <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Устройства</div>
+            <p className="mt-1.5 text-sm text-white/62">Быстрый доступ к ключевым системам.</p>
           </div>
+          <SlidersIcon className="h-6 w-6 text-white/25" />
         </div>
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-3">
-          {[
-            {
-              key: 'fans',
-              label: 'Вентиляторы',
-              accent: 'from-emerald-300/90 to-emerald-500/60',
-              value: devices.fans.level,
-            },
-            {
-              key: 'lights',
-              label: 'Освещение',
-              accent: 'from-yellow-300/90 to-orange-400/60',
-              value: devices.lights.level,
-            },
-            {
-              key: 'pumps',
-              label: 'Насосы',
-              accent: 'from-cyan-300/90 to-sky-400/60',
-              value: devices.pumps.level,
-            },
-          ].map((item) => (
-            <GlassCard key={item.key} soft className="rounded-[24px]">
-              <div className="text-lg font-medium text-white">{item.label}</div>
-              <div className="mt-1 text-sm text-white/60">Уровень: {item.value}%</div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={item.value}
-                onChange={(event) => handleRange(item.key, event.target.value)}
-                className="mt-4 h-2 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-white"
-              />
-              <div className="mt-4 h-2 rounded-full bg-white/8">
-                <div className={`h-full rounded-full bg-gradient-to-r ${item.accent}`} style={{ width: `${item.value}%` }} />
-              </div>
-            </GlassCard>
+        <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {manualDevices.map((device) => (
+            <DeviceCard
+              key={device.key}
+              title={device.title}
+              statusText={device.statusText}
+              level={devices[device.key].level}
+              enabled={devices[device.key].enabled}
+              onToggle={handleToggle(device.key)}
+              icon={device.icon}
+              accent={device.accent}
+              showProgress={false}
+            />
           ))}
         </div>
       </GlassCard>
@@ -506,8 +815,8 @@ export default function App() {
   )
 
   return (
-    <div className="farm-shell relative min-h-screen overflow-x-hidden px-3 py-3 md:px-4 md:py-4 xl:h-screen xl:overflow-hidden xl:px-6 xl:py-6">
-      <div className="mx-auto flex h-full w-full max-w-[1800px] flex-col gap-4">
+    <div className="farm-shell relative min-h-screen overflow-x-hidden px-3 py-3 md:px-4 md:py-4 lg:px-6 lg:py-6 min-[1700px]:h-screen min-[1700px]:overflow-hidden">
+      <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-4 min-[1700px]:h-full">
         <HeaderBar
           mode={mode}
           setMode={setMode}
@@ -515,10 +824,10 @@ export default function App() {
           currentDate={currentDate}
         />
 
-        <main className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="flex h-full min-h-0 flex-col">{mode === 'monitoring' ? renderMonitoring() : renderManual()}</div>
+        <main className="grid min-w-0 gap-4 min-[1700px]:min-h-0 min-[1700px]:flex-1 min-[1700px]:grid-cols-[minmax(0,1fr)_340px] min-[1900px]:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="flex min-w-0 flex-col min-[1700px]:h-full min-[1700px]:min-h-0">{mode === 'monitoring' ? renderMonitoring() : renderManual()}</div>
 
-          <aside className="flex h-full min-h-0 flex-col">
+          <aside className="flex min-h-[520px] min-w-0 flex-col min-[1700px]:h-full min-[1700px]:min-h-0">
             <ChatPanel
               messages={messages}
               input={chatInput}
