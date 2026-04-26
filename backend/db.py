@@ -89,6 +89,169 @@ def ensure_jsonb_column(cursor, table_name: str, column_name: str) -> None:
     )
 
 
+DEVICE_FK_CONSTRAINTS = (
+    ("telemetry_raw", "fk_telemetry_raw_tray_id_devices", "tray_id", "devices", "id"),
+    ("telemetry_hourly", "fk_telemetry_hourly_tray_id_devices", "tray_id", "devices", "id"),
+    ("anomaly_events", "fk_anomaly_events_tray_id_devices", "tray_id", "devices", "id"),
+)
+
+
+def normalize_device_id(device_id: Any) -> str | None:
+    if device_id is None:
+        return None
+    normalized = str(device_id).strip()
+    return normalized or None
+
+
+def _ensure_device(cursor, device_id: Any, status: str | None = None) -> str | None:
+    normalized_device_id = normalize_device_id(device_id)
+    if normalized_device_id is None:
+        return None
+
+    cursor.execute(
+        """
+        INSERT INTO devices (id, status, last_seen)
+        VALUES (%s, %s, now())
+        ON CONFLICT (id) DO UPDATE SET
+            status = COALESCE(EXCLUDED.status, devices.status),
+            last_seen = EXCLUDED.last_seen
+        """,
+        (normalized_device_id, status),
+    )
+    return normalized_device_id
+
+
+def ensure_device(device_id: Any) -> str | None:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            return _ensure_device(cursor, device_id)
+
+
+def backfill_devices_for_existing_tray_ids(cursor) -> None:
+    for table_name in ("telemetry_raw", "telemetry_hourly", "anomaly_events"):
+        cursor.execute(
+            sql.SQL(
+                """
+                UPDATE {}
+                SET tray_id = NULL
+                WHERE tray_id IS NOT NULL
+                  AND btrim(tray_id) = ''
+                """
+            ).format(sql.Identifier(table_name))
+        )
+
+    cursor.execute(
+        """
+        INSERT INTO devices (id, status, last_seen)
+        SELECT tray_id, NULL, now()
+        FROM (
+            SELECT DISTINCT tray_id FROM telemetry_raw WHERE tray_id IS NOT NULL
+            UNION
+            SELECT DISTINCT tray_id FROM telemetry_hourly WHERE tray_id IS NOT NULL
+            UNION
+            SELECT DISTINCT tray_id FROM anomaly_events WHERE tray_id IS NOT NULL
+        ) AS existing_tray_ids
+        ON CONFLICT (id) DO NOTHING
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO devices (id, status, last_seen)
+        SELECT 'unknown', NULL, now()
+        WHERE EXISTS (SELECT 1 FROM telemetry_raw WHERE tray_id IS NULL)
+        ON CONFLICT (id) DO NOTHING
+        """
+    )
+
+
+def constraint_exists(cursor, table_name: str, constraint_name: str) -> bool:
+    cursor.execute(
+        """
+        SELECT 1
+        FROM information_schema.table_constraints
+        WHERE table_schema = current_schema()
+          AND table_name = %s
+          AND constraint_name = %s
+        """,
+        (table_name, constraint_name),
+    )
+    return cursor.fetchone() is not None
+
+
+def foreign_key_exists(
+    cursor,
+    table_name: str,
+    column_name: str,
+    referenced_table: str,
+    referenced_column: str,
+) -> bool:
+    cursor.execute(
+        """
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class child_table ON child_table.oid = c.conrelid
+        JOIN pg_namespace child_namespace ON child_namespace.oid = child_table.relnamespace
+        JOIN pg_class parent_table ON parent_table.oid = c.confrelid
+        JOIN pg_attribute child_column
+          ON child_column.attrelid = c.conrelid
+         AND child_column.attnum = ANY(c.conkey)
+        JOIN pg_attribute parent_column
+          ON parent_column.attrelid = c.confrelid
+         AND parent_column.attnum = ANY(c.confkey)
+        WHERE c.contype = 'f'
+          AND child_namespace.nspname = current_schema()
+          AND child_table.relname = %s
+          AND child_column.attname = %s
+          AND parent_table.relname = %s
+          AND parent_column.attname = %s
+        LIMIT 1
+        """,
+        (table_name, column_name, referenced_table, referenced_column),
+    )
+    return cursor.fetchone() is not None
+
+
+def add_foreign_key_if_missing(
+    cursor,
+    table_name: str,
+    constraint_name: str,
+    column_name: str,
+    referenced_table: str,
+    referenced_column: str,
+) -> None:
+    if constraint_exists(cursor, table_name, constraint_name) or foreign_key_exists(
+        cursor,
+        table_name,
+        column_name,
+        referenced_table,
+        referenced_column,
+    ):
+        return
+
+    cursor.execute(
+        sql.SQL(
+            """
+            ALTER TABLE {}
+            ADD CONSTRAINT {}
+            FOREIGN KEY ({})
+            REFERENCES {}({})
+            """
+        ).format(
+            sql.Identifier(table_name),
+            sql.Identifier(constraint_name),
+            sql.Identifier(column_name),
+            sql.Identifier(referenced_table),
+            sql.Identifier(referenced_column),
+        )
+    )
+
+
+def ensure_device_foreign_keys(cursor) -> None:
+    backfill_devices_for_existing_tray_ids(cursor)
+    for fk_config in DEVICE_FK_CONSTRAINTS:
+        add_foreign_key_if_missing(cursor, *fk_config)
+
+
 def init_db() -> None:
     with get_connection() as connection:
         with connection.cursor() as cursor:
@@ -101,6 +264,11 @@ def init_db() -> None:
                 )
                 """
             )
+            cursor.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS status TEXT")
+            cursor.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ")
+            cursor.execute("UPDATE devices SET last_seen = now() WHERE last_seen IS NULL")
+            cursor.execute("ALTER TABLE devices ALTER COLUMN last_seen SET DEFAULT now()")
+            cursor.execute("ALTER TABLE devices ALTER COLUMN last_seen SET NOT NULL")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS telemetry_raw (
@@ -261,6 +429,7 @@ def init_db() -> None:
                 """
             )
             ensure_jsonb_column(cursor, "ai_logs", "commands_json")
+            ensure_device_foreign_keys(cursor)
 
 
 def parse_json_value(payload: Any) -> Any:
@@ -311,22 +480,14 @@ def format_timestamp(value: Any) -> str:
 def update_device_status(device_id: str) -> None:
     with get_connection() as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO devices (id, status, last_seen)
-                VALUES (%s, %s, now())
-                ON CONFLICT (id) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    last_seen = EXCLUDED.last_seen
-                """,
-                (device_id, "online"),
-            )
+            _ensure_device(cursor, device_id, "online")
 
 
 def save_telemetry(topic: str, payload: str, recorded_at: datetime | None = None) -> None:
     parsed_value = parse_json_value(payload)
     parsed_payload = parsed_value if isinstance(parsed_value, dict) else {}
     tray_id, sensor_type = parse_topic(topic)
+    tray_id = normalize_device_id(tray_id)
     timestamp_sql = "%s" if recorded_at is not None else "now()"
     params: list[Any] = [
         topic,
@@ -344,6 +505,7 @@ def save_telemetry(topic: str, payload: str, recorded_at: datetime | None = None
 
     with get_connection() as connection:
         with connection.cursor() as cursor:
+            _ensure_device(cursor, tray_id or "unknown")
             cursor.execute(
                 f"""
                 INSERT INTO telemetry_raw (
@@ -553,6 +715,7 @@ def get_hourly_history(metric_name: str, hours: int = 24) -> list[dict[str, Any]
 def aggregate_completed_hours() -> int:
     with get_connection() as connection:
         with connection.cursor() as cursor:
+            _ensure_device(cursor, "unknown")
             cursor.execute(
                 """
                 WITH completed_hours AS (
@@ -684,9 +847,10 @@ def save_anomaly_event(
     payload: dict[str, Any] | None = None,
     cooldown_minutes: int = 5,
 ) -> bool:
-    normalized_tray_id = tray_id or "unknown"
+    normalized_tray_id = normalize_device_id(tray_id) or "unknown"
     with get_connection() as connection:
         with connection.cursor() as cursor:
+            _ensure_device(cursor, normalized_tray_id)
             cursor.execute(
                 """
                 WITH recent_duplicate AS (
