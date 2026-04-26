@@ -18,13 +18,21 @@ from db import (
     ActiveCardRevisionNotFoundError,
     ActiveGrowingCycleExistsError,
     CropNotFoundError,
+    GrowingCycleNotFinishedError,
+    GrowingCycleNotFoundError,
+    InvalidCycleResultError,
     NoActiveGrowingCycleError,
     aggregate_completed_hours,
     delete_old_raw_data,
     finish_growing_cycle,
     get_active_cycle_ai_context,
+    get_active_cycle_norm_ranges,
+    get_advisor_report,
     get_available_crops,
+    get_cycle_advisor_reports,
     get_current_growing_cycle,
+    get_cycle_result,
+    get_database_model_summary,
     get_last_climate_records,
     get_recent_anomaly_events,
     get_recent_ai_logs,
@@ -33,6 +41,8 @@ from db import (
     init_db,
     save_ai_log,
     save_anomaly_event,
+    save_cycle_result,
+    save_device_event,
     save_telemetry,
     start_growing_cycle,
     update_device_status,
@@ -463,8 +473,12 @@ def build_advisor_response(crop: str) -> dict[str, Any]:
     current = latest_metric_snapshot(telemetry_records)
     hourly_rows = get_recent_hourly_summary(ADVISOR_HISTORY_HOURS)
     anomaly_events = get_recent_anomaly_events(ADVISOR_HISTORY_HOURS)
-    crop_rules = get_crop_rules(crop)
-    crop_ranges = parse_crop_ranges(crop_rules)
+    crop_rules = None
+    crop_ranges = get_active_cycle_norm_ranges("tray_1")
+    crop_ranges_source = "database_active_cycle" if crop_ranges else "markdown_fallback"
+    if not crop_ranges:
+        crop_rules = get_crop_rules(crop)
+        crop_ranges = parse_crop_ranges(crop_rules)
 
     risks: list[str] = []
     recommendations: list[str] = []
@@ -481,6 +495,7 @@ def build_advisor_response(crop: str) -> dict[str, Any]:
                 "history_hours": ADVISOR_HISTORY_HOURS,
                 "hourly_points": len(hourly_rows),
                 "anomaly_events": len(anomaly_events),
+                "crop_ranges_source": crop_ranges_source,
             },
         }
 
@@ -559,7 +574,8 @@ def build_advisor_response(crop: str) -> dict[str, Any]:
             "history_hours": ADVISOR_HISTORY_HOURS,
             "hourly_points": len(hourly_rows),
             "anomaly_events": len(anomaly_events),
-            "crop_rules_loaded": isinstance(crop_rules, str),
+            "crop_rules_loaded": bool(crop_ranges) or isinstance(crop_rules, str),
+            "crop_ranges_source": crop_ranges_source,
         },
     }
 
@@ -951,9 +967,20 @@ class EndGrowingCycleRequest(BaseModel):
     notes: str | None = None
 
 
+class CycleResultRequest(BaseModel):
+    harvest_weight_grams: float | None = None
+    quality_score: int | None = None
+    operator_comment: str | None = None
+
+
 @app.get("/")
 def read_root() -> dict[str, str]:
     return {"status": "ok", "db": "initialized"}
+
+
+@app.get("/api/debug/db-model")
+def get_debug_database_model() -> dict[str, Any]:
+    return get_database_model_summary()
 
 
 @app.get("/api/telemetry")
@@ -994,6 +1021,19 @@ def control_device(request: DeviceControlRequest) -> dict[str, str]:
         payload = f"TIMER {request.duration:g}"
 
     app.state.mqtt_client.publish(topic, payload)
+    save_device_event(
+        f"{request.target_id}_{request.device_type}",
+        tray_id=request.target_id,
+        command=request.state,
+        value=payload,
+        source="manual",
+        payload={
+            "topic": topic,
+            "device_type": request.device_type,
+            "state": request.state,
+            "duration": request.duration,
+        },
+    )
     return {
         "status": "sent",
         "target_id": request.target_id,
@@ -1012,7 +1052,7 @@ async def ai_decide() -> dict[str, Any]:
             f"Советник: {thought}",
             "Автоуправление отключено: AI не отправляет MQTT-команды.",
         ]
-        await asyncio.to_thread(save_ai_log, thought, [])
+        await asyncio.to_thread(save_ai_log, thought, [], source="advisor")
         return {"logs": logs, "thought": thought, "commands": []}
 
     advisor_report = await asyncio.to_thread(build_advisor_response, active_cycle["crop_slug"])
@@ -1036,13 +1076,21 @@ async def ai_decide() -> dict[str, Any]:
             logs.append(f"Рекомендация: {recommendation}")
     logs.append("Автоуправление отключено: AI не отправляет MQTT-команды.")
 
-    await asyncio.to_thread(save_ai_log, thought, [])
+    await asyncio.to_thread(save_ai_log, thought, [], source="advisor")
     return {"logs": logs, "thought": thought, "commands": []}
 
 
 @app.get("/api/advisor")
 def get_advisor(crop: str = Query(default="lettuce")) -> dict[str, Any]:
     return build_advisor_response(crop)
+
+
+@app.get("/api/advisor/reports/{report_id}")
+def api_get_advisor_report(report_id: int) -> dict[str, Any]:
+    report = get_advisor_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail={"error": f"Advisor report '{report_id}' not found"})
+    return report
 
 
 @app.get("/api/crops")
@@ -1082,6 +1130,36 @@ def api_finish_growing_cycle(request: EndGrowingCycleRequest) -> dict[str, Any]:
         )
     except NoActiveGrowingCycleError as exc:
         raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+
+
+@app.get("/api/cycles/{cycle_id}/advisor-reports")
+def api_get_cycle_advisor_reports(cycle_id: int) -> list[dict[str, Any]]:
+    return get_cycle_advisor_reports(cycle_id)
+
+
+@app.get("/api/cycles/{cycle_id}/result")
+def api_get_cycle_result(cycle_id: int) -> dict[str, Any] | None:
+    try:
+        return get_cycle_result(cycle_id)
+    except GrowingCycleNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+
+
+@app.post("/api/cycles/{cycle_id}/result")
+def api_save_cycle_result(cycle_id: int, request: CycleResultRequest) -> dict[str, Any]:
+    try:
+        return save_cycle_result(
+            cycle_id,
+            harvest_weight_grams=request.harvest_weight_grams,
+            quality_score=request.quality_score,
+            operator_comment=request.operator_comment,
+        )
+    except GrowingCycleNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+    except GrowingCycleNotFinishedError as exc:
+        raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+    except InvalidCycleResultError as exc:
+        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
 
 @app.get("/api/logs")
@@ -1138,6 +1216,7 @@ async def chat_with_ai(request: ChatRequest) -> dict[str, Any]:
             "type": "chat",
             "analysis_steps": analysis_steps,
         },
+        source="chat",
     )
     return {
         "reply": reply,
