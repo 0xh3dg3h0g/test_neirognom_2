@@ -11,6 +11,7 @@ import {
   sparklineSeries,
 } from './data/mock'
 import {
+  BrainIcon,
   DropletIcon,
   FanIcon,
   HumidityIcon,
@@ -333,16 +334,6 @@ export default function App() {
     }
   }
 
-  const handleRange = (key, value) => {
-    setDevices((prev) => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        level: Number(value),
-      },
-    }))
-  }
-
   const handleSendMessage = async () => {
     const text = chatInput.trim()
     if (!text || isChatThinking) return
@@ -395,41 +386,66 @@ export default function App() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <GlassCard className="flex min-h-0 flex-col overflow-hidden rounded-[28px]">
-          <div className="flex shrink-0 items-center justify-between xl:gap-3">
-            <div>
-              <div className="text-[22px] font-semibold tracking-tight md:text-[24px] xl:text-[22px] 2xl:text-[24px]">Устройства</div>
-              <p className="mt-1.5 text-sm text-white/62 xl:mt-1 xl:text-[13px] 2xl:mt-1.5 2xl:text-sm">Быстрый доступ к ключевым системам.</p>
+          <div className="flex shrink-0 items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/8 text-white/90">
+              <SlidersIcon className="h-5 w-5" />
             </div>
-            <SlidersIcon className="h-6 w-6 text-white/20" />
+            <div>
+              <div className="text-[22px] font-semibold tracking-tight md:text-[24px] xl:text-[22px] 2xl:text-[24px]">Состояние фермы</div>
+              <p className="mt-1.5 text-sm text-white/62 xl:mt-1 xl:text-[13px] 2xl:mt-1.5 2xl:text-sm">Сводка системы и текущий статус.</p>
+            </div>
           </div>
-          <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3 items-start content-start auto-rows-max overflow-hidden">
-            <DeviceCard
-              title={devices.fans.title}
-              subtitle={devices.fans.subtitle}
-              level={devices.fans.level}
-              enabled={devices.fans.enabled}
-              onToggle={handleToggle('fans')}
-              icon={<FanIcon className="h-6 w-6" />}
-              accent="#75F08D"
-            />
-            <DeviceCard
-              title={devices.lights.title}
-              subtitle={devices.lights.subtitle}
-              level={devices.lights.level}
-              enabled={devices.lights.enabled}
-              onToggle={handleToggle('lights')}
-              icon={<LightIcon className="h-6 w-6" />}
-              accent="#FFD667"
-            />
-            <DeviceCard
-              title={devices.pumps.title}
-              subtitle={devices.pumps.subtitle}
-              level={devices.pumps.level}
-              enabled={devices.pumps.enabled}
-              onToggle={handleToggle('pumps')}
-              icon={<PumpIcon className="h-6 w-6" />}
-              accent="#8EC8FF"
-            />
+          <div className="mt-6 grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-3 overflow-hidden xl:mt-5 2xl:mt-6">
+            {[
+              {
+                title: 'Полив',
+                status: 'Работает штатно',
+                description: 'Система полива функционирует в автоматическом режиме.',
+                icon: <PumpIcon className="h-10 w-10" />,
+                accent: '#2CB4FF',
+              },
+              {
+                title: 'Освещение',
+                status: 'Дневной режим активен',
+                description: 'LED-освещение работает по дневному сценарию.',
+                icon: <LightIcon className="h-10 w-10" />,
+                accent: '#FFD667',
+              },
+              {
+                title: 'Вентиляция',
+                status: 'Стабильная работа',
+                description: 'Параметры воздуха в пределах нормы.',
+                icon: <FanIcon className="h-10 w-10" />,
+                accent: '#75F08D',
+              },
+              {
+                title: 'Совет Нейрогнома',
+                status: 'Параметры в пределах нормы',
+                description: 'Продолжайте текущий режим. Отличная работа!',
+                icon: <BrainIcon className="h-10 w-10" />,
+                accent: '#C668FF',
+              },
+            ].map((item) => (
+              <GlassCard key={item.title} soft className="flex min-h-[260px] flex-col items-center rounded-[24px] px-4 py-6 text-center">
+                <div className="text-[17px] font-semibold text-white">{item.title}</div>
+                <div
+                  className="mt-7 flex h-20 w-20 items-center justify-center rounded-full border"
+                  style={{
+                    borderColor: `${item.accent}80`,
+                    color: item.accent,
+                    backgroundColor: `${item.accent}18`,
+                    boxShadow: `0 0 26px ${item.accent}30`,
+                  }}
+                >
+                  {item.icon}
+                </div>
+                <div className="mt-7 text-[14px] font-semibold" style={{ color: item.accent }}>
+                  {item.status}
+                </div>
+                <p className="mt-4 flex-1 text-[13px] leading-relaxed text-white/62">{item.description}</p>
+                <div className="mt-5 h-[3px] w-full rounded-full" style={{ backgroundColor: item.accent, boxShadow: `0 0 14px ${item.accent}70` }} />
+              </GlassCard>
+            ))}
           </div>
         </GlassCard>
 
@@ -452,43 +468,40 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-3">
-          {[
-            {
-              key: 'fans',
-              label: 'Вентиляторы',
-              accent: 'from-emerald-300/90 to-emerald-500/60',
-              value: devices.fans.level,
-            },
-            {
-              key: 'lights',
-              label: 'Освещение',
-              accent: 'from-yellow-300/90 to-orange-400/60',
-              value: devices.lights.level,
-            },
-            {
-              key: 'pumps',
-              label: 'Насосы',
-              accent: 'from-cyan-300/90 to-sky-400/60',
-              value: devices.pumps.level,
-            },
-          ].map((item) => (
-            <GlassCard key={item.key} soft className="rounded-[24px]">
-              <div className="text-lg font-medium text-white">{item.label}</div>
-              <div className="mt-1 text-sm text-white/60">Уровень: {item.value}%</div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={item.value}
-                onChange={(event) => handleRange(item.key, event.target.value)}
-                className="mt-4 h-2 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-white"
-              />
-              <div className="mt-4 h-2 rounded-full bg-white/8">
-                <div className={`h-full rounded-full bg-gradient-to-r ${item.accent}`} style={{ width: `${item.value}%` }} />
-              </div>
-            </GlassCard>
-          ))}
+        <div className="mt-7 grid gap-4 lg:grid-cols-3">
+          <DeviceCard
+            title={devices.fans.title}
+            statusText={`Состояние: ${devices.fans.enabled ? 'включено' : 'выключено'}`}
+            statusColor={devices.fans.enabled ? '#53E78A' : undefined}
+            enabled={devices.fans.enabled}
+            onToggle={handleToggle('fans')}
+            icon={<FanIcon className="h-7 w-7" />}
+            accent="#75F08D"
+            showProgress={false}
+            className="min-h-[150px] lg:min-h-[176px]"
+          />
+          <DeviceCard
+            title={devices.lights.title}
+            statusText={`Состояние: ${devices.lights.enabled ? 'включено' : 'выключено'}`}
+            statusColor={devices.lights.enabled ? '#53E78A' : undefined}
+            enabled={devices.lights.enabled}
+            onToggle={handleToggle('lights')}
+            icon={<LightIcon className="h-7 w-7" />}
+            accent="#FFD667"
+            showProgress={false}
+            className="min-h-[150px] lg:min-h-[176px]"
+          />
+          <DeviceCard
+            title={devices.pumps.title}
+            statusText={`Состояние: ${devices.pumps.enabled ? 'включено' : 'выключено'}`}
+            statusColor={devices.pumps.enabled ? '#53E78A' : undefined}
+            enabled={devices.pumps.enabled}
+            onToggle={handleToggle('pumps')}
+            icon={<PumpIcon className="h-7 w-7" />}
+            accent="#8EC8FF"
+            showProgress={false}
+            className="min-h-[150px] lg:min-h-[176px]"
+          />
         </div>
       </GlassCard>
 
