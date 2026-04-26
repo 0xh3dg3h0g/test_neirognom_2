@@ -10,13 +10,20 @@ from typing import Any, Literal
 import httpx
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from db import (
+    ActiveCardRevisionNotFoundError,
+    ActiveGrowingCycleExistsError,
+    CropNotFoundError,
+    NoActiveGrowingCycleError,
     aggregate_completed_hours,
     delete_old_raw_data,
+    finish_growing_cycle,
+    get_available_crops,
+    get_current_growing_cycle,
     get_last_climate_records,
     get_recent_anomaly_events,
     get_recent_ai_logs,
@@ -26,6 +33,7 @@ from db import (
     save_ai_log,
     save_anomaly_event,
     save_telemetry,
+    start_growing_cycle,
     update_device_status,
 )
 from tools import TOOLS_SCHEMA, get_current_metrics, get_history, get_crop_rules, get_recent_anomalies
@@ -861,6 +869,17 @@ class ChatRequest(BaseModel):
     messages: list
 
 
+class StartGrowingCycleRequest(BaseModel):
+    crop_slug: str
+    tray_id: str = "tray_1"
+    notes: str | None = None
+
+
+class EndGrowingCycleRequest(BaseModel):
+    tray_id: str = "tray_1"
+    notes: str | None = None
+
+
 @app.get("/")
 def read_root() -> dict[str, str]:
     return {"status": "ok", "db": "initialized"}
@@ -938,6 +957,45 @@ async def ai_decide() -> dict[str, Any]:
 @app.get("/api/advisor")
 def get_advisor(crop: str = Query(default="lettuce")) -> dict[str, Any]:
     return build_advisor_response(crop)
+
+
+@app.get("/api/crops")
+def api_get_crops() -> list[dict[str, Any]]:
+    return get_available_crops()
+
+
+@app.get("/api/cycles/current")
+def api_get_current_growing_cycle(
+    tray_id: str = Query(default="tray_1"),
+) -> dict[str, Any] | None:
+    return get_current_growing_cycle(tray_id)
+
+
+@app.post("/api/cycles/start")
+def api_start_growing_cycle(request: StartGrowingCycleRequest) -> dict[str, Any]:
+    try:
+        return start_growing_cycle(
+            request.crop_slug,
+            tray_id=request.tray_id,
+            notes=request.notes,
+        )
+    except CropNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+    except ActiveCardRevisionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+    except ActiveGrowingCycleExistsError as exc:
+        raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+
+
+@app.post("/api/cycles/end")
+def api_finish_growing_cycle(request: EndGrowingCycleRequest) -> dict[str, Any]:
+    try:
+        return finish_growing_cycle(
+            tray_id=request.tray_id,
+            notes=request.notes,
+        )
+    except NoActiveGrowingCycleError as exc:
+        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
 
 
 @app.get("/api/logs")

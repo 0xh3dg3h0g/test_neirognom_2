@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,34 @@ load_dotenv(BASE_DIR.parent / ".env")
 
 CLIMATE_TOPIC = "farm/tray_1/sensors/climate"
 WATER_TOPIC = "farm/tray_1/sensors/water"
+CROPS_DATA_DIR = BASE_DIR / "crops_data"
+AGROTECH_NORM_KEYS = (
+    "air_temp",
+    "humidity",
+    "water_temp",
+    "ph",
+    "ec",
+    "light_hours",
+    "light_intensity",
+)
+NON_CROP_CARD_FILES = {"crops_index.md", "project_recommendations.md"}
+DEFAULT_TRAY_ID = "tray_1"
+
+
+class CropNotFoundError(ValueError):
+    pass
+
+
+class ActiveCardRevisionNotFoundError(ValueError):
+    pass
+
+
+class ActiveGrowingCycleExistsError(ValueError):
+    pass
+
+
+class NoActiveGrowingCycleError(ValueError):
+    pass
 
 
 def get_database_url() -> str:
@@ -252,6 +281,794 @@ def ensure_device_foreign_keys(cursor) -> None:
         add_foreign_key_if_missing(cursor, *fk_config)
 
 
+def extract_markdown_section(content: str, heading: str) -> str | None:
+    match = re.search(
+        rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(?P<body>.*?)(?=^##\s+|\Z)",
+        content,
+    )
+    if not match:
+        return None
+    return match.group("body").strip()
+
+
+def extract_first_nonempty_line(content: str, heading: str) -> str | None:
+    section = extract_markdown_section(content, heading)
+    if not section:
+        return None
+    for line in section.splitlines():
+        value = line.strip()
+        if value:
+            return value
+    return None
+
+
+def extract_crop_slug(content: str, fallback_slug: str) -> str:
+    match = re.search(r"(?im)^#\s*CULTURE:\s*([a-z0-9_-]+)\s*$", content)
+    return match.group(1).strip().lower() if match else fallback_slug
+
+
+def extract_card_title(content: str, fallback_slug: str) -> str:
+    name_ru = extract_first_nonempty_line(content, "Название")
+    if name_ru:
+        return name_ru
+
+    match = re.search(r"(?m)^#\s+(.+?)\s*$", content)
+    if match:
+        return match.group(1).strip()
+
+    return fallback_slug.replace("_", " ").title()
+
+
+def parse_norm_value(raw_value: str) -> Any:
+    value = raw_value.strip()
+    numeric_range_match = re.fullmatch(
+        r"(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)",
+        value,
+    )
+    if numeric_range_match:
+        low, high = numeric_range_match.groups()
+        return {"min": float(low), "max": float(high)}
+
+    numeric_match = re.fullmatch(r"-?\d+(?:\.\d+)?", value)
+    if numeric_match:
+        return float(value)
+
+    object_match = re.fullmatch(r'([a-zA-Z_][\w-]*)\s*:\s*"?(.*?)"?', value)
+    if object_match:
+        key, nested_value = object_match.groups()
+        return {key: nested_value}
+
+    return value.strip('"')
+
+
+def parse_agrotech_params(content: str) -> dict[str, Any]:
+    norms_block = extract_markdown_section(content, "Нормы")
+    if not norms_block:
+        return {}
+
+    params: dict[str, Any] = {}
+    for key in AGROTECH_NORM_KEYS:
+        match = re.search(rf"(?im)^\s*{re.escape(key)}\s*:\s*(.+?)\s*$", norms_block)
+        if match:
+            params[key] = parse_norm_value(match.group(1))
+    return params
+
+
+def ensure_agrotech_schema(cursor) -> None:
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS crops (
+            id BIGSERIAL PRIMARY KEY,
+            slug TEXT NOT NULL UNIQUE,
+            name_ru TEXT,
+            crop_type TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agrotech_cards (
+            id BIGSERIAL PRIMARY KEY,
+            crop_id BIGINT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agrotech_card_revisions (
+            id BIGSERIAL PRIMARY KEY,
+            card_id BIGINT NOT NULL,
+            version_major INTEGER NOT NULL,
+            version_minor INTEGER NOT NULL,
+            version_label TEXT NOT NULL,
+            parent_revision_id BIGINT,
+            params_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            content TEXT NOT NULL,
+            source TEXT,
+            change_reason TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            is_active BOOLEAN NOT NULL DEFAULT false
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agrotech_audit_log (
+            id BIGSERIAL PRIMARY KEY,
+            card_id BIGINT NOT NULL,
+            revision_id BIGINT,
+            action TEXT NOT NULL,
+            old_params_json JSONB,
+            new_params_json JSONB,
+            reason TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agrotech_cards_crop_id ON agrotech_cards(crop_id)"
+    )
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agrotech_card_revisions_version
+        ON agrotech_card_revisions(card_id, version_major, version_minor)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agrotech_card_revisions_active
+        ON agrotech_card_revisions(card_id)
+        WHERE is_active
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agrotech_audit_log_card_id ON agrotech_audit_log(card_id, created_at DESC)"
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "agrotech_cards",
+        "fk_agrotech_cards_crop_id_crops",
+        "crop_id",
+        "crops",
+        "id",
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "agrotech_card_revisions",
+        "fk_agrotech_card_revisions_card_id_cards",
+        "card_id",
+        "agrotech_cards",
+        "id",
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "agrotech_card_revisions",
+        "fk_agrotech_card_revisions_parent_revision_id",
+        "parent_revision_id",
+        "agrotech_card_revisions",
+        "id",
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "agrotech_audit_log",
+        "fk_agrotech_audit_log_card_id_cards",
+        "card_id",
+        "agrotech_cards",
+        "id",
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "agrotech_audit_log",
+        "fk_agrotech_audit_log_revision_id_revisions",
+        "revision_id",
+        "agrotech_card_revisions",
+        "id",
+    )
+
+
+def _get_or_create_crop(
+    cursor,
+    *,
+    slug: str,
+    name_ru: str | None = None,
+    crop_type: str | None = None,
+) -> dict[str, Any]:
+    cursor.execute(
+        """
+        INSERT INTO crops (slug, name_ru, crop_type)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (slug) DO NOTHING
+        RETURNING id, slug, name_ru, crop_type, created_at
+        """,
+        (slug, name_ru, crop_type),
+    )
+    row = cursor.fetchone()
+    if row:
+        return row
+
+    cursor.execute(
+        """
+        SELECT id, slug, name_ru, crop_type, created_at
+        FROM crops
+        WHERE slug = %s
+        """,
+        (slug,),
+    )
+    return cursor.fetchone()
+
+
+def get_or_create_crop(
+    *,
+    slug: str,
+    name_ru: str | None = None,
+    crop_type: str | None = None,
+) -> dict[str, Any]:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            return _get_or_create_crop(
+                cursor,
+                slug=slug,
+                name_ru=name_ru,
+                crop_type=crop_type,
+            )
+
+
+def _get_or_create_agrotech_card(cursor, *, crop_id: int, title: str) -> dict[str, Any]:
+    cursor.execute(
+        """
+        INSERT INTO agrotech_cards (crop_id, title, status)
+        VALUES (%s, %s, 'active')
+        ON CONFLICT (crop_id) DO NOTHING
+        RETURNING id, crop_id, title, status, created_at
+        """,
+        (crop_id, title),
+    )
+    row = cursor.fetchone()
+    if row:
+        return row
+
+    cursor.execute(
+        """
+        SELECT id, crop_id, title, status, created_at
+        FROM agrotech_cards
+        WHERE crop_id = %s
+        """,
+        (crop_id,),
+    )
+    return cursor.fetchone()
+
+
+def _create_card_revision(
+    cursor,
+    *,
+    card_id: int,
+    version_major: int,
+    version_minor: int,
+    params_json: dict[str, Any] | None,
+    content: str,
+    source: str | None = None,
+    change_reason: str | None = None,
+    created_by: str | None = None,
+    parent_revision_id: int | None = None,
+    is_active: bool = True,
+) -> dict[str, Any] | None:
+    version_label = f"v{version_major}.{version_minor}"
+    cursor.execute(
+        """
+        SELECT id, card_id, version_major, version_minor, version_label,
+               parent_revision_id, params_json, content, source,
+               change_reason, created_by, created_at, is_active
+        FROM agrotech_card_revisions
+        WHERE card_id = %s
+          AND version_major = %s
+          AND version_minor = %s
+        """,
+        (card_id, version_major, version_minor),
+    )
+    existing_revision = cursor.fetchone()
+    if existing_revision:
+        return existing_revision
+
+    if is_active:
+        cursor.execute(
+            """
+            UPDATE agrotech_card_revisions
+            SET is_active = false
+            WHERE card_id = %s
+              AND is_active
+            """,
+            (card_id,),
+        )
+
+    cursor.execute(
+        """
+        INSERT INTO agrotech_card_revisions (
+            card_id, version_major, version_minor, version_label,
+            parent_revision_id, params_json, content, source,
+            change_reason, created_by, is_active
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, card_id, version_major, version_minor, version_label,
+                  parent_revision_id, params_json, content, source,
+                  change_reason, created_by, created_at, is_active
+        """,
+        (
+            card_id,
+            version_major,
+            version_minor,
+            version_label,
+            parent_revision_id,
+            Jsonb(params_json or {}),
+            content,
+            source,
+            change_reason,
+            created_by,
+            is_active,
+        ),
+    )
+    revision = cursor.fetchone()
+    cursor.execute(
+        """
+        INSERT INTO agrotech_audit_log (
+            card_id, revision_id, action, old_params_json,
+            new_params_json, reason, created_at
+        )
+        VALUES (%s, %s, %s, NULL, %s, %s, now())
+        """,
+        (
+            card_id,
+            revision["id"],
+            "create_revision",
+            Jsonb(params_json or {}),
+            change_reason,
+        ),
+    )
+    return revision
+
+
+def _card_has_active_revision(cursor, card_id: int) -> bool:
+    cursor.execute(
+        """
+        SELECT 1
+        FROM agrotech_card_revisions
+        WHERE card_id = %s
+          AND is_active
+        LIMIT 1
+        """,
+        (card_id,),
+    )
+    return cursor.fetchone() is not None
+
+
+def _card_revision_exists(
+    cursor,
+    *,
+    card_id: int,
+    version_major: int,
+    version_minor: int,
+) -> bool:
+    cursor.execute(
+        """
+        SELECT 1
+        FROM agrotech_card_revisions
+        WHERE card_id = %s
+          AND version_major = %s
+          AND version_minor = %s
+        LIMIT 1
+        """,
+        (card_id, version_major, version_minor),
+    )
+    return cursor.fetchone() is not None
+
+
+def create_card_revision(
+    *,
+    card_id: int,
+    version_major: int,
+    version_minor: int,
+    params_json: dict[str, Any] | None,
+    content: str,
+    source: str | None = None,
+    change_reason: str | None = None,
+    created_by: str | None = None,
+    parent_revision_id: int | None = None,
+    is_active: bool = True,
+) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            return _create_card_revision(
+                cursor,
+                card_id=card_id,
+                version_major=version_major,
+                version_minor=version_minor,
+                params_json=params_json,
+                content=content,
+                source=source,
+                change_reason=change_reason,
+                created_by=created_by,
+                parent_revision_id=parent_revision_id,
+                is_active=is_active,
+            )
+
+
+def _import_crop_cards_from_md(cursor) -> int:
+    if not CROPS_DATA_DIR.exists():
+        return 0
+
+    imported_count = 0
+    for path in sorted(CROPS_DATA_DIR.glob("*.md")):
+        if path.name in NON_CROP_CARD_FILES:
+            continue
+
+        content = path.read_text(encoding="utf-8")
+        slug = extract_crop_slug(content, path.stem)
+        title = extract_card_title(content, slug)
+        crop_type = extract_first_nonempty_line(content, "Тип культуры")
+        params_json = parse_agrotech_params(content)
+
+        crop = _get_or_create_crop(
+            cursor,
+            slug=slug,
+            name_ru=title,
+            crop_type=crop_type,
+        )
+        card = _get_or_create_agrotech_card(cursor, crop_id=crop["id"], title=title)
+        if _card_revision_exists(
+            cursor,
+            card_id=card["id"],
+            version_major=1,
+            version_minor=0,
+        ):
+            continue
+
+        revision = _create_card_revision(
+            cursor,
+            card_id=card["id"],
+            version_major=1,
+            version_minor=0,
+            params_json=params_json,
+            content=content,
+            source=f"crops_data/{path.name}",
+            change_reason="Initial import from Markdown",
+            created_by="init_db",
+            is_active=not _card_has_active_revision(cursor, card["id"]),
+        )
+        if revision and revision.get("version_major") == 1 and revision.get("version_minor") == 0:
+            imported_count += 1
+
+    return imported_count
+
+
+def import_crop_cards_from_md() -> int:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            return _import_crop_cards_from_md(cursor)
+
+
+def _get_active_card_revision(cursor, crop_slug: str) -> dict[str, Any] | None:
+    cursor.execute(
+        """
+        SELECT
+            crops.id AS crop_id,
+            crops.slug,
+            crops.name_ru,
+            crops.crop_type,
+            agrotech_cards.id AS card_id,
+            agrotech_cards.title,
+            agrotech_cards.status,
+            agrotech_card_revisions.id AS revision_id,
+            agrotech_card_revisions.version_major,
+            agrotech_card_revisions.version_minor,
+            agrotech_card_revisions.version_label,
+            agrotech_card_revisions.parent_revision_id,
+            agrotech_card_revisions.params_json,
+            agrotech_card_revisions.content,
+            agrotech_card_revisions.source,
+            agrotech_card_revisions.change_reason,
+            agrotech_card_revisions.created_by,
+            agrotech_card_revisions.created_at,
+            agrotech_card_revisions.is_active
+        FROM crops
+        JOIN agrotech_cards ON agrotech_cards.crop_id = crops.id
+        JOIN agrotech_card_revisions
+          ON agrotech_card_revisions.card_id = agrotech_cards.id
+        WHERE crops.slug = %s
+          AND agrotech_card_revisions.is_active
+        LIMIT 1
+        """,
+        (crop_slug,),
+    )
+    return cursor.fetchone()
+
+
+def get_active_card_revision(crop_slug: str) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            return _get_active_card_revision(cursor, crop_slug)
+
+
+def ensure_growing_cycles_schema(cursor) -> None:
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS growing_cycles (
+            id BIGSERIAL PRIMARY KEY,
+            tray_id TEXT NOT NULL,
+            crop_id BIGINT NOT NULL,
+            card_revision_id BIGINT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            finished_at TIMESTAMPTZ,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+    if not constraint_exists(cursor, "growing_cycles", "chk_growing_cycles_status"):
+        cursor.execute(
+            """
+            ALTER TABLE growing_cycles
+            ADD CONSTRAINT chk_growing_cycles_status
+            CHECK (status IN ('active', 'finished', 'cancelled'))
+            """
+        )
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_growing_cycles_active_tray_id
+        ON growing_cycles(tray_id)
+        WHERE status = 'active'
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_growing_cycles_tray_status
+        ON growing_cycles(tray_id, status, started_at DESC)
+        """
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "growing_cycles",
+        "fk_growing_cycles_tray_id_devices",
+        "tray_id",
+        "devices",
+        "id",
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "growing_cycles",
+        "fk_growing_cycles_crop_id_crops",
+        "crop_id",
+        "crops",
+        "id",
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "growing_cycles",
+        "fk_growing_cycles_card_revision_id_revisions",
+        "card_revision_id",
+        "agrotech_card_revisions",
+        "id",
+    )
+
+
+def calculate_cycle_day_number(
+    started_at: datetime | None,
+    finished_at: datetime | None,
+    status: str | None,
+) -> int | None:
+    if started_at is None:
+        return None
+
+    if status == "finished" and finished_at is not None:
+        end_at = finished_at
+    else:
+        end_at = datetime.now(started_at.tzinfo)
+
+    return max((end_at.date() - started_at.date()).days + 1, 1)
+
+
+def row_to_growing_cycle(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "tray_id": row["tray_id"],
+        "status": row["status"],
+        "crop_slug": row["crop_slug"],
+        "crop_name_ru": row["crop_name_ru"],
+        "card_revision_id": row["card_revision_id"],
+        "version_label": row["version_label"],
+        "started_at": format_timestamp(row["started_at"]),
+        "finished_at": format_timestamp(row["finished_at"]) if row["finished_at"] is not None else None,
+        "day_number": calculate_cycle_day_number(
+            row["started_at"],
+            row["finished_at"],
+            row["status"],
+        ),
+    }
+
+
+def _select_growing_cycle_by_id(cursor, cycle_id: int) -> dict[str, Any] | None:
+    cursor.execute(
+        """
+        SELECT
+            growing_cycles.id,
+            growing_cycles.tray_id,
+            growing_cycles.status,
+            growing_cycles.card_revision_id,
+            growing_cycles.started_at,
+            growing_cycles.finished_at,
+            crops.slug AS crop_slug,
+            crops.name_ru AS crop_name_ru,
+            agrotech_card_revisions.version_label
+        FROM growing_cycles
+        JOIN crops ON crops.id = growing_cycles.crop_id
+        JOIN agrotech_card_revisions
+          ON agrotech_card_revisions.id = growing_cycles.card_revision_id
+        WHERE growing_cycles.id = %s
+        """,
+        (cycle_id,),
+    )
+    return cursor.fetchone()
+
+
+def _get_current_growing_cycle(cursor, tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any] | None:
+    normalized_tray_id = normalize_device_id(tray_id) or DEFAULT_TRAY_ID
+    cursor.execute(
+        """
+        SELECT
+            growing_cycles.id,
+            growing_cycles.tray_id,
+            growing_cycles.status,
+            growing_cycles.card_revision_id,
+            growing_cycles.started_at,
+            growing_cycles.finished_at,
+            crops.slug AS crop_slug,
+            crops.name_ru AS crop_name_ru,
+            agrotech_card_revisions.version_label
+        FROM growing_cycles
+        JOIN crops ON crops.id = growing_cycles.crop_id
+        JOIN agrotech_card_revisions
+          ON agrotech_card_revisions.id = growing_cycles.card_revision_id
+        WHERE growing_cycles.tray_id = %s
+          AND growing_cycles.status = 'active'
+        ORDER BY growing_cycles.started_at DESC, growing_cycles.id DESC
+        LIMIT 1
+        """,
+        (normalized_tray_id,),
+    )
+    return cursor.fetchone()
+
+
+def get_available_crops() -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    crops.id,
+                    crops.slug,
+                    crops.name_ru,
+                    crops.crop_type,
+                    agrotech_cards.id AS card_id,
+                    agrotech_card_revisions.id AS active_revision_id,
+                    agrotech_card_revisions.version_label
+                FROM crops
+                JOIN agrotech_cards ON agrotech_cards.crop_id = crops.id
+                JOIN agrotech_card_revisions
+                  ON agrotech_card_revisions.card_id = agrotech_cards.id
+                 AND agrotech_card_revisions.is_active
+                ORDER BY crops.slug
+                """
+            )
+            return cursor.fetchall()
+
+
+def get_current_growing_cycle(tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            return row_to_growing_cycle(_get_current_growing_cycle(cursor, tray_id))
+
+
+def start_growing_cycle(
+    crop_slug: str,
+    tray_id: str = DEFAULT_TRAY_ID,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    normalized_tray_id = normalize_device_id(tray_id) or DEFAULT_TRAY_ID
+    normalized_crop_slug = str(crop_slug or "").strip()
+    if not normalized_crop_slug:
+        raise CropNotFoundError("crop_slug is required")
+
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            _ensure_device(cursor, normalized_tray_id)
+
+            cursor.execute(
+                """
+                SELECT id
+                FROM crops
+                WHERE slug = %s
+                """,
+                (normalized_crop_slug,),
+            )
+            crop = cursor.fetchone()
+            if crop is None:
+                raise CropNotFoundError(f"Crop '{normalized_crop_slug}' not found")
+
+            active_revision = _get_active_card_revision(cursor, normalized_crop_slug)
+            if active_revision is None:
+                raise ActiveCardRevisionNotFoundError(
+                    f"Active agrotech card revision for crop '{normalized_crop_slug}' not found"
+                )
+
+            if _get_current_growing_cycle(cursor, normalized_tray_id) is not None:
+                raise ActiveGrowingCycleExistsError(
+                    f"Tray '{normalized_tray_id}' already has an active growing cycle"
+                )
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO growing_cycles (
+                        tray_id, crop_id, card_revision_id, status,
+                        started_at, notes, created_at
+                    )
+                    VALUES (%s, %s, %s, 'active', now(), %s, now())
+                    RETURNING id
+                    """,
+                    (
+                        normalized_tray_id,
+                        active_revision["crop_id"],
+                        active_revision["revision_id"],
+                        notes,
+                    ),
+                )
+            except psycopg.errors.UniqueViolation as exc:
+                raise ActiveGrowingCycleExistsError(
+                    f"Tray '{normalized_tray_id}' already has an active growing cycle"
+                ) from exc
+
+            created = cursor.fetchone()
+            cycle = _select_growing_cycle_by_id(cursor, created["id"])
+            return row_to_growing_cycle(cycle)
+
+
+def finish_growing_cycle(
+    tray_id: str = DEFAULT_TRAY_ID,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    normalized_tray_id = normalize_device_id(tray_id) or DEFAULT_TRAY_ID
+
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            active_cycle = _get_current_growing_cycle(cursor, normalized_tray_id)
+            if active_cycle is None:
+                raise NoActiveGrowingCycleError(
+                    f"Tray '{normalized_tray_id}' has no active growing cycle"
+                )
+
+            cursor.execute(
+                """
+                UPDATE growing_cycles
+                SET status = 'finished',
+                    finished_at = now(),
+                    notes = COALESCE(%s, notes)
+                WHERE id = %s
+                RETURNING id
+                """,
+                (notes, active_cycle["id"]),
+            )
+            updated = cursor.fetchone()
+            cycle = _select_growing_cycle_by_id(cursor, updated["id"])
+            return row_to_growing_cycle(cycle)
+
+
 def init_db() -> None:
     with get_connection() as connection:
         with connection.cursor() as cursor:
@@ -430,6 +1247,9 @@ def init_db() -> None:
             )
             ensure_jsonb_column(cursor, "ai_logs", "commands_json")
             ensure_device_foreign_keys(cursor)
+            ensure_agrotech_schema(cursor)
+            _import_crop_cards_from_md(cursor)
+            ensure_growing_cycles_schema(cursor)
 
 
 def parse_json_value(payload: Any) -> Any:
