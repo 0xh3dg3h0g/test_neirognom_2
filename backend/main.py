@@ -22,6 +22,7 @@ from db import (
     aggregate_completed_hours,
     delete_old_raw_data,
     finish_growing_cycle,
+    get_active_cycle_ai_context,
     get_available_crops,
     get_current_growing_cycle,
     get_last_climate_records,
@@ -61,20 +62,33 @@ HOURLY_AGGREGATION_INTERVAL_SECONDS = 300
 RAW_RETENTION_HOURS = 24
 ANOMALY_EVENT_COOLDOWN_MINUTES = 5
 ADVISOR_HISTORY_HOURS = 24
+AI_CONTEXT_NORM_KEYS = (
+    "air_temp",
+    "humidity",
+    "water_temp",
+    "ph",
+    "ec",
+    "light_hours",
+    "light_intensity",
+)
 CHAT_SYSTEM_PROMPT = (
     "Ты — Нейрогном, дружелюбный, умный и лаконичный помощник сити-фермы. "
-    "В каждом запросе тебе невидимо передаются текущие показатели датчиков (Температура воздуха, Влажность, Температура воды).\n\n"
+    "В каждом запросе тебе невидимо передаются текущие показатели датчиков и, если он есть, активный цикл выращивания.\n\n"
     "ТВОИ ПРАВИЛА:\n"
     "1. Режим молчания о цифрах: НИКОГДА не перечисляй и не упоминай текущие показатели датчиков, "
     "если пользователь прямо не спросил ('как показатели?', 'всё ли в норме?'). Для обычных бесед используй эти данные только в уме.\n"
-    "2. Светская беседа: Если с тобой просто здороваются или общаются на отвлеченные темы — "
+    "2. Если backend передал активный цикл, всегда оценивай ферму относительно активной культуры, версии АгроТехКарты и дня цикла. "
+    "Не выбирай культуру по догадке из сообщения пользователя, если активный цикл есть.\n"
+    "3. Если пользователь спрашивает 'Всё ли нормально на ферме?', оценивай текущие датчики относительно норм активной АгроТехКарты. "
+    "Используй нормы из активного цикла как приоритетные.\n"
+    "4. Если активного цикла нет, честно скажи, что цикл не запущен, и предложи запустить цикл или уточнить культуру. "
+    "Не подставляй lettuce, basil или любую другую культуру по умолчанию.\n"
+    "5. Не утверждай, что pH или EC в норме, если по ним нет данных датчиков или в активной АгроТехКарте нет соответствующих норм.\n"
+    "6. Светская беседа: Если с тобой просто здороваются или общаются на отвлеченные темы — "
     "отвечай по-человечески, тепло и без занудства.\n"
-    "3. Тревога: Если ты видишь в скрытых данных, что параметры вышли за рамки "
-    "(например, температура воздуха выше 28 градусов или влажность ниже 50%) — мягко предупреди об опасности и дай совет.\n"
-    "4. Агро-энциклопедия: Если спрашивают, как выращивать конкретную культуру, выдай базовые "
-    "требования. Если текущие показатели фермы подходят под эти требования — можешь порадоваться этому.\n"
-    "5. Ограничения языка: Отвечай на русском языке. Обозначения pH и EC разрешены. "
-    "Английские slug-названия культур можно использовать, если пользователь сам их написал или если это нужно для точности. "
+    "7. Тревога: Если ты видишь в скрытых данных, что параметры вышли за рамки, мягко предупреди об опасности и дай совет.\n"
+    "8. Ограничения языка: Отвечай на русском языке. Обозначения pH и EC разрешены. "
+    "Английские slug-названия культур можно использовать, если это нужно для точности. "
     "Запрещено использовать программный код, теги или markdown-разметку. Пиши чистым, обычным текстом."
 )
 
@@ -729,15 +743,72 @@ def format_latest_data_for_prompt() -> str:
     )
 
 
+def format_ai_norm_value(value: Any) -> str:
+    if isinstance(value, dict):
+        if "min" in value and "max" in value:
+            return f"{value['min']}–{value['max']}"
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def format_active_cycle_for_prompt(tray_id: str = "tray_1") -> str:
+    active_cycle = get_active_cycle_ai_context(tray_id)
+    if active_cycle is None:
+        return (
+            "Активный цикл: не запущен. "
+            "Не делай выводы под конкретную культуру, если пользователь её явно не назвал."
+        )
+
+    if active_cycle.get("revision_id") is None:
+        return (
+            "Активный цикл найден, но ревизия АгроТехКарты отсутствует. "
+            f"Лоток: {active_cycle.get('tray_id')}. "
+            "Не оценивай нормы выращивания без данных ревизии."
+        )
+
+    lines = [
+        "Активный цикл:",
+        f"культура: {active_cycle.get('crop_name_ru') or 'без названия'} ({active_cycle.get('crop_slug')})",
+        (
+            "версия АгроТехКарты: "
+            f"{active_cycle.get('version_label') or 'не указана'}, revision_id={active_cycle.get('revision_id')}"
+        ),
+        f"день цикла: {active_cycle.get('day_number') or 1}",
+        f"лоток: {active_cycle.get('tray_id')}",
+    ]
+
+    params_json = active_cycle.get("params_json")
+    if isinstance(params_json, dict) and params_json:
+        norm_lines = [
+            f"{key}: {format_ai_norm_value(params_json[key])}"
+            for key in AI_CONTEXT_NORM_KEYS
+            if key in params_json and params_json[key] is not None
+        ]
+        if norm_lines:
+            lines.append("нормы выращивания: " + "; ".join(norm_lines))
+        else:
+            lines.append("нормы выращивания: в params_json нет поддерживаемых норм")
+    else:
+        lines.append("нормы выращивания: params_json пустой или отсутствует")
+
+    lines.append("Правило: Используй эти нормы как приоритетные при оценке состояния фермы.")
+    return "\n".join(lines)
+
+
 def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None) -> str:
     translated_data_string = format_latest_data_for_prompt()
-    prompt_parts = [f"Данные датчиков: {translated_data_string}"]
+    prompt_parts = [
+        f"Данные датчиков: {translated_data_string}",
+        format_active_cycle_for_prompt("tray_1"),
+    ]
 
     if history:
         history_lines: list[str] = []
         for item in history:
             role = item.get("role", "").strip().lower()
-            text = item.get("text", "").strip()
+            text = str(item.get("text") or item.get("content") or "").strip()
             if not text:
                 continue
             speaker = "Пользователь" if role == "user" else "Нейрогном"
@@ -934,12 +1005,27 @@ def control_device(request: DeviceControlRequest) -> dict[str, str]:
 
 @app.post("/api/ai/decide")
 async def ai_decide() -> dict[str, Any]:
-    advisor_report = await asyncio.to_thread(build_advisor_response, "lettuce")
+    active_cycle = await asyncio.to_thread(get_active_cycle_ai_context, "tray_1")
+    if not active_cycle:
+        thought = "Активный цикл не запущен, агрономическая оценка по конкретной культуре невозможна"
+        logs = [
+            f"Советник: {thought}",
+            "Автоуправление отключено: AI не отправляет MQTT-команды.",
+        ]
+        await asyncio.to_thread(save_ai_log, thought, [])
+        return {"logs": logs, "thought": thought, "commands": []}
+
+    advisor_report = await asyncio.to_thread(build_advisor_response, active_cycle["crop_slug"])
     thought = str(advisor_report.get("summary", "")).strip()
     recommendations = advisor_report.get("recommendations", [])
     risks = advisor_report.get("risks", [])
 
     logs: list[str] = []
+    logs.append(
+        "Активный цикл: "
+        f"{active_cycle.get('crop_name_ru') or active_cycle.get('crop_slug')} "
+        f"({active_cycle.get('crop_slug')}), день {active_cycle.get('day_number')}"
+    )
     if thought:
         logs.append(f"Советник: {thought}")
     if isinstance(risks, list):
@@ -1015,17 +1101,21 @@ async def chat_with_ai(request: ChatRequest) -> dict[str, Any]:
     ]
     enriched_prompt = build_chat_prompt(user_prompt, history)
     analysis_steps.append("Добавляю актуальные показатели фермы в контекст")
-    detected_crops = detect_crops_in_message(user_prompt)
-    crop_rules_context = build_crop_rules_context(detected_crops)
-    unsupported_crop_context = build_unsupported_crop_context(user_prompt)
-    if detected_crops:
-        analysis_steps.append("Нашёл упоминания культур в запросе")
-    if crop_rules_context:
-        analysis_steps.append("Загружаю базу знаний культур из crops_data")
-        enriched_prompt = f"{crop_rules_context}\n\n{enriched_prompt}"
-    if unsupported_crop_context:
-        analysis_steps.append("Проверяю ограничения по неподходящим культурам")
-        enriched_prompt = f"{unsupported_crop_context}\n\n{enriched_prompt}"
+    active_cycle = await asyncio.to_thread(get_active_cycle_ai_context, "tray_1")
+    if active_cycle:
+        analysis_steps.append("Добавляю активный цикл выращивания в контекст ИИ")
+    else:
+        detected_crops = detect_crops_in_message(user_prompt)
+        crop_rules_context = build_crop_rules_context(detected_crops)
+        unsupported_crop_context = build_unsupported_crop_context(user_prompt)
+        if detected_crops:
+            analysis_steps.append("Нашёл упоминания культур в запросе")
+        if crop_rules_context:
+            analysis_steps.append("Загружаю базу знаний культур из crops_data")
+            enriched_prompt = f"{crop_rules_context}\n\n{enriched_prompt}"
+        if unsupported_crop_context:
+            analysis_steps.append("Проверяю ограничения по неподходящим культурам")
+            enriched_prompt = f"{unsupported_crop_context}\n\n{enriched_prompt}"
 
     try:
         reply = await ask_ai(CHAT_SYSTEM_PROMPT, enriched_prompt, None, analysis_steps)

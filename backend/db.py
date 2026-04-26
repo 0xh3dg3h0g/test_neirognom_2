@@ -975,6 +975,69 @@ def get_current_growing_cycle(tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any] 
             return row_to_growing_cycle(_get_current_growing_cycle(cursor, tray_id))
 
 
+def get_active_cycle_ai_context(tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any] | None:
+    normalized_tray_id = normalize_device_id(tray_id) or DEFAULT_TRAY_ID
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    growing_cycles.id AS cycle_id,
+                    growing_cycles.tray_id,
+                    growing_cycles.status,
+                    growing_cycles.started_at,
+                    crops.slug AS crop_slug,
+                    crops.name_ru AS crop_name_ru,
+                    crops.crop_type,
+                    agrotech_cards.id AS card_id,
+                    agrotech_card_revisions.id AS revision_id,
+                    agrotech_card_revisions.version_label,
+                    agrotech_card_revisions.params_json,
+                    agrotech_card_revisions.content
+                FROM growing_cycles
+                JOIN crops ON crops.id = growing_cycles.crop_id
+                LEFT JOIN agrotech_card_revisions
+                  ON agrotech_card_revisions.id = growing_cycles.card_revision_id
+                LEFT JOIN agrotech_cards
+                  ON agrotech_cards.id = agrotech_card_revisions.card_id
+                WHERE growing_cycles.tray_id = %s
+                  AND growing_cycles.status = 'active'
+                ORDER BY growing_cycles.started_at DESC, growing_cycles.id DESC
+                LIMIT 1
+                """,
+                (normalized_tray_id,),
+            )
+            row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    params_json = row["params_json"]
+    if isinstance(params_json, str):
+        try:
+            params_json = json.loads(params_json)
+        except json.JSONDecodeError:
+            params_json = {}
+    if not isinstance(params_json, dict):
+        params_json = {}
+
+    return {
+        "cycle_id": row["cycle_id"],
+        "tray_id": row["tray_id"],
+        "status": row["status"],
+        "started_at": format_timestamp(row["started_at"]),
+        "day_number": calculate_cycle_day_number(row["started_at"], None, row["status"]) or 1,
+        "crop_slug": row["crop_slug"],
+        "crop_name_ru": row["crop_name_ru"],
+        "crop_type": row["crop_type"],
+        "card_id": row["card_id"],
+        "revision_id": row["revision_id"],
+        "version_label": row["version_label"],
+        "params_json": params_json,
+        "content": row["content"],
+    }
+
+
 def start_growing_cycle(
     crop_slug: str,
     tray_id: str = DEFAULT_TRAY_ID,
