@@ -35,6 +35,7 @@ from db import (
     get_cycle_result,
     get_crop_agrotech_card_from_db,
     get_database_model_summary,
+    get_hourly_history,
     get_last_climate_records,
     get_recent_anomaly_events,
     get_recent_device_events,
@@ -50,7 +51,7 @@ from db import (
     start_growing_cycle,
     update_device_status,
 )
-from tools import TOOLS_SCHEMA, get_current_metrics, get_history, get_crop_agrotech_card, get_recent_anomalies
+from tools import get_current_metrics
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR.parent / ".env")
@@ -107,7 +108,27 @@ CHAT_SYSTEM_PROMPT = (
     "9. Если backend передал расширенный контекст фермы, используй его как факты. "
     "Не придумывай историю устройств, если её нет в device_events. "
     "Не говори, что полив в норме, если нет истории насоса и нет достаточных данных влажности. "
-    "Для pH/EC не советуй добавлять щёлочь, кислоту или менять раствор без текущего значения pH/EC."
+    "Для pH/EC не советуй добавлять щёлочь, кислоту или менять раствор без текущего значения pH/EC.\n"
+    "10. Если пользователь задаёт follow-up вопрос с местоимениями вроде 'он', 'она', 'сколько раз', "
+    "'когда последний раз', используй расширенный контекст фермы, который backend добавил на основе недавней темы диалога. "
+    "Не говори, что точных данных нет, если в расширенном контексте есть counts/history из device_events.\n"
+    "11. Если вопрос требует фактов из БД фермы, вызывай доступные инструменты. "
+    "Не придумывай количество включений устройств, pH, EC, аномалии, активную культуру или историю метрик. "
+    "Если пользователь задаёт follow-up вопрос, используй историю диалога и вызывай подходящий инструмент. "
+    "Если пользователь спрашивает про несколько устройств, запроси данные по каждому устройству. "
+    "Если инструмент вернул has_events=false, честно скажи, что событий за период нет. "
+    "Для советов про pH/EC сначала получи текущие pH/EC и нормы культуры. "
+    "Не советуй добавлять щёлочь, кислоту или менять раствор без текущего значения pH. "
+    "Для вопросов про конкретную культуру вызывай get_crop_card_tool. "
+    "Для вопросов про текущее состояние фермы используй текущие метрики, активный цикл и, при необходимости, аномалии.\n"
+    "12. Не используй повреждённый символ �. Если нужно переформулировать слово, напиши его обычными русскими буквами.\n"
+    "13. Для конкретной культуры сначала используй get_crop_card_tool. "
+    "Если tool вернул suitability_status='db_supported', отвечай по АгроТехКарте. "
+    "Если suitability_status='compatible_not_in_db', можно дать только общую справку и обязательно сказать, что точной АгроТехКарты в БД нет. "
+    "Если suitability_status='advanced_or_unsuitable', не рассказывай подробную агротехнику для этой установки; объясни, что культура может требовать другой гидропонной системы, большего объёма, опоры, опыления или другого формата выращивания. "
+    "Если suitability_status='unknown', не придумывай пригодность культуры и предложи выбрать из supported_crops. "
+    "Для текущей установки приоритетные культуры: зелень, травы, микрозелень и компактные листовые культуры. "
+    "Не представляй плодоносящие крупные культуры как подходящие для маленьких стаканчиков, если они не поддерживаются БД."
 )
 
 CROP_ALIASES: dict[str, tuple[str, ...]] = {
@@ -139,6 +160,35 @@ CROP_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+CITY_FARM_COMPATIBLE_CROP_ALIASES: dict[str, tuple[str, ...]] = {
+    "basil": ("базилик", "basil"),
+    "arugula": ("руккола", "рукола", "arugula"),
+    "lettuce": ("салат", "латук", "lettuce"),
+    "spinach": ("шпинат", "spinach"),
+    "cilantro": ("кинза", "cilantro", "coriander"),
+    "dill": ("укроп", "dill"),
+    "mint": ("мята", "mint"),
+    "parsley": ("петрушка", "parsley"),
+    "pak_choi": ("пак-чой", "пак чой", "pak choi", "bok choy"),
+    "chard": ("мангольд", "chard", "swiss chard"),
+    "microgreens": ("микрозелень", "microgreens", "микрозелень редиса", "микрозелень гороха"),
+}
+
+
+CITY_FARM_ADVANCED_OR_UNSUITABLE_CROP_ALIASES: dict[str, tuple[str, ...]] = {
+    "cucumber": ("огурец", "огурцы", "cucumber", "cucumbers"),
+    "tomato": ("томат", "томаты", "помидор", "помидоры", "tomato", "tomatoes"),
+    "pepper": ("перец", "перцы", "pepper", "peppers"),
+    "eggplant": ("баклажан", "баклажаны", "eggplant"),
+    "melon": ("дыня", "дыни", "арбуз", "арбузы", "melon", "watermelon"),
+    "carrot": ("морковь", "carrot"),
+    "potato": ("картофель", "potato"),
+    "beet": ("свекла", "свёкла", "beet"),
+    "radish": ("редис", "редиска", "radish"),
+    "pea": ("горох", "pea"),
+}
+
+
 def detect_crops_in_message(message: str) -> list[str]:
     normalized_message = message.lower().replace("ё", "е")
     detected: list[str] = []
@@ -152,6 +202,196 @@ def detect_crops_in_message(message: str) -> list[str]:
                 break
 
     return detected
+
+
+def normalize_dialog_text(text: Any) -> str:
+    normalized = str(text or "").strip().lower().replace("ё", "е")
+    normalized = normalized.replace("_", " ").replace("-", " ")
+    return " ".join(normalized.split())
+
+
+def get_crop_lookup_aliases() -> dict[str, set[str]]:
+    aliases_by_slug: dict[str, set[str]] = {}
+
+    for slug, aliases in CROP_ALIASES.items():
+        aliases_by_slug.setdefault(slug, set()).update(
+            normalize_dialog_text(alias)
+            for alias in aliases
+            if normalize_dialog_text(alias)
+        )
+
+    try:
+        available_crops = get_available_crops()
+    except Exception:
+        available_crops = []
+
+    for crop in available_crops:
+        slug = str(crop.get("slug") or crop.get("crop_slug") or "").strip()
+        if not slug:
+            continue
+        crop_aliases = aliases_by_slug.setdefault(slug, set())
+        for value in (slug, crop.get("name_ru"), crop.get("crop_name_ru")):
+            normalized_value = normalize_dialog_text(value)
+            if normalized_value:
+                crop_aliases.add(normalized_value)
+
+    return aliases_by_slug
+
+
+def find_crop_alias_match(text: str, alias: str) -> re.Match[str] | None:
+    if not alias:
+        return None
+    if re.search(r"[а-я]", alias, re.IGNORECASE) and " " not in alias and len(alias) >= 5:
+        stem = alias[:-1] if alias[-1] in "аяьй" else alias
+        pattern = rf"(?<![\w]){re.escape(stem)}[а-я]*(?![\w])"
+    else:
+        pattern = rf"(?<![\w]){re.escape(alias)}(?![\w])"
+    return next(re.finditer(pattern, text, re.IGNORECASE), None)
+
+
+def find_city_farm_crop_alias(
+    text: str,
+    aliases_by_crop: dict[str, tuple[str, ...]],
+) -> str | None:
+    normalized_text = normalize_dialog_text(text)
+    if not normalized_text:
+        return None
+
+    latest_crop: str | None = None
+    latest_position = -1
+    for crop, aliases in aliases_by_crop.items():
+        for alias in aliases:
+            match = find_crop_alias_match(normalized_text, normalize_dialog_text(alias))
+            if match and match.start() >= latest_position:
+                latest_crop = crop
+                latest_position = match.start()
+
+    return latest_crop
+
+
+def get_supported_city_farm_crops() -> list[str]:
+    supported = set(CITY_FARM_COMPATIBLE_CROP_ALIASES.keys())
+    try:
+        for crop in get_available_crops():
+            slug = str(crop.get("slug") or crop.get("crop_slug") or "").strip()
+            name = str(crop.get("name_ru") or crop.get("crop_name_ru") or "").strip()
+            if name:
+                supported.add(name)
+            elif slug:
+                supported.add(slug)
+    except Exception:
+        pass
+    return sorted(supported)
+
+
+def classify_crop_suitability_for_city_farm(crop_name_or_slug: str) -> dict[str, Any]:
+    requested_crop = str(crop_name_or_slug or "").strip()
+    normalized_crop = normalize_dialog_text(requested_crop)
+    supported_crops = get_supported_city_farm_crops()
+
+    card = get_crop_agrotech_card_from_db(requested_crop)
+    if card is None:
+        detected_crop = extract_explicit_crop_from_text(requested_crop)
+        card = get_crop_agrotech_card_from_db(detected_crop) if detected_crop else None
+
+    if card is not None:
+        return {
+            "normalized_crop": card.get("crop_slug") or normalized_crop,
+            "status": "db_supported",
+            "reason": "Культура найдена в БД АгроТехКарт.",
+            "supported_crops": supported_crops,
+            "card": card,
+        }
+
+    compatible_crop = find_city_farm_crop_alias(normalized_crop, CITY_FARM_COMPATIBLE_CROP_ALIASES)
+    if compatible_crop:
+        return {
+            "normalized_crop": compatible_crop,
+            "status": "compatible_not_in_db",
+            "reason": "Культура подходит для компактной гидропонной сити-фермы, но её точной АгроТехКарты пока нет в БД.",
+            "supported_crops": supported_crops,
+        }
+
+    unsuitable_crop = find_city_farm_crop_alias(normalized_crop, CITY_FARM_ADVANCED_OR_UNSUITABLE_CROP_ALIASES)
+    if unsuitable_crop:
+        return {
+            "normalized_crop": unsuitable_crop,
+            "status": "advanced_or_unsuitable",
+            "reason": "Культура требует другой системы выращивания или не подходит для текущей маленькой установки со стаканчиками.",
+            "supported_crops": supported_crops,
+        }
+
+    return {
+        "normalized_crop": normalized_crop,
+        "status": "unknown",
+        "reason": "Культура не найдена в БД и не классифицирована как подходящая для текущей компактной сити-фермы.",
+        "supported_crops": supported_crops,
+    }
+
+
+def extract_explicit_crop_from_text(text: Any, aliases_by_slug: dict[str, set[str]] | None = None) -> str | None:
+    normalized_text = normalize_dialog_text(text)
+    if not normalized_text:
+        return None
+
+    aliases_by_slug = aliases_by_slug or get_crop_lookup_aliases()
+    latest_slug: str | None = None
+    latest_position = -1
+    for slug, aliases in aliases_by_slug.items():
+        for alias in aliases:
+            match = find_crop_alias_match(normalized_text, alias)
+            if match and match.start() >= latest_position:
+                latest_slug = slug
+                latest_position = match.start()
+
+    return latest_slug
+
+
+def extract_last_explicit_crop_from_messages(messages: list | None, current_message: str | None = None, limit: int = 6) -> str | None:
+    latest_slug: str | None = None
+    aliases_by_slug = get_crop_lookup_aliases()
+    if isinstance(messages, list):
+        for item in messages[-limit:]:
+            if not isinstance(item, dict):
+                continue
+            slug = extract_explicit_crop_from_text(item.get("content") or item.get("text") or "", aliases_by_slug)
+            if slug:
+                latest_slug = slug
+
+    if current_message is not None:
+        slug = extract_explicit_crop_from_text(current_message, aliases_by_slug)
+        if slug:
+            latest_slug = slug
+
+    return latest_slug
+
+
+def is_crop_follow_up_message(message: str) -> bool:
+    text = normalize_dialog_text(message)
+    if not text:
+        return False
+
+    crop_phrases = (
+        "эта культура", "этой культуре", "это растение", "растение", "культура",
+        "для нее", "для него", "у нее", "у него", "ей нужен", "ему нужен",
+        "ей нужна", "ему нужна", "ей нужно", "ему нужно",
+        "а это нормально", "это нормально растет", "это нормально растёт",
+    )
+    if any(phrase in text for phrase in crop_phrases):
+        return True
+
+    has_reference = bool(re.search(r"(?<![\w])(она|оно|он|ей|ему|ее|его|нее|него)(?![\w])", text))
+    crop_question_markers = (
+        "норм", "растет", "растёт", "рост", "ph", "ec", "нужен", "нужна",
+        "нужно", "высокий", "низкий", "питание", "раствор",
+    )
+    device_markers = ("насос", "лампа", "свет", "вентилятор", "включался", "выключался", "срабатывал")
+    if re.search(r"(?<![\w])а\s+(она|оно)(?![\w])", text) and not any(marker in text for marker in device_markers):
+        return True
+    if has_reference and any(marker in text for marker in crop_question_markers):
+        return not any(marker in text for marker in device_markers)
+
+    return False
 
 
 def is_root_radish_question(message: str) -> bool:
@@ -660,13 +900,311 @@ def add_analysis_step(analysis_steps: list[str] | None, step: str) -> None:
         analysis_steps.append(step)
 
 
+def sanitize_ai_reply(text: str) -> str:
+    if not text:
+        return ""
+
+    cleaned = str(text)
+    if "\uFFFD" in cleaned:
+        cleaned = cleaned.replace("\uFFFD", "")
+        print("[AI_SANITIZE] Removed replacement characters from AI reply")
+
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned)
+    cleaned = re.sub(r" {2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+FARM_AI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_metrics_tool",
+            "description": "Получить текущие показатели фермы: температура воздуха, влажность, температура воды, pH, EC.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_active_cycle_tool",
+            "description": "Получить активный цикл выращивания для tray_id: культура, день цикла, версия АгроТехКарты, нормы.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tray_id": {
+                        "type": "string",
+                        "description": "Лоток фермы. По умолчанию tray_1.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_device_events_tool",
+            "description": (
+                "Получить историю событий устройств за период. Используй, когда пользователь спрашивает, "
+                "включалось ли устройство, сколько раз, когда последний раз, как часто срабатывало."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tray_id": {
+                        "type": "string",
+                        "description": "Лоток фермы. По умолчанию tray_1.",
+                    },
+                    "device_types": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["pump", "fan", "light"]},
+                        "description": "Типы устройств: pump, fan, light.",
+                    },
+                    "hours": {
+                        "type": "integer",
+                        "description": "Период в часах. По умолчанию 24.",
+                    },
+                },
+                "required": ["device_types"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_anomalies_tool",
+            "description": "Получить недавние аномалии фермы. Используй для вопросов про проблемы, отклонения, перегрев, влажность, pH, EC.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hours": {
+                        "type": "integer",
+                        "description": "Период в часах. По умолчанию 24.",
+                    },
+                    "event_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Необязательный фильтр по типам событий.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_crop_card_tool",
+            "description": "Получить АгроТехКарту культуры по названию или slug и проверить пригодность культуры для текущей компактной сити-фермы. Используй, когда пользователь спрашивает про конкретную культуру или продолжает говорить о ней.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "crop_name_or_slug": {
+                        "type": "string",
+                        "description": "Название культуры или slug.",
+                    },
+                },
+                "required": ["crop_name_or_slug"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_metric_history_tool",
+            "description": "Получить историю метрики за период. Используй, когда пользователь спрашивает про динамику, тренд или последние часы.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric_name": {
+                        "type": "string",
+                        "enum": ["temperature", "humidity", "water_temp", "ph", "ec"],
+                        "description": "Метрика: temperature, humidity, water_temp, ph, ec.",
+                    },
+                    "hours": {
+                        "type": "integer",
+                        "description": "Период в часах. По умолчанию 24.",
+                    },
+                },
+                "required": ["metric_name"],
+            },
+        },
+    },
+]
+
+
+def normalize_tool_hours(value: Any, default: int = 24) -> int:
+    try:
+        hours = int(value)
+    except (TypeError, ValueError):
+        hours = default
+    return max(1, min(hours, 168))
+
+
+def event_minutes_ago(value: Any) -> int | None:
+    event_time = parse_event_timestamp(value)
+    if event_time is None:
+        return None
+    now = datetime.now(event_time.tzinfo) if event_time.tzinfo else datetime.now()
+    return max(0, int((now - event_time).total_seconds() // 60))
+
+
+def summarize_device_events(events: list[dict[str, Any]], device_type: str) -> dict[str, Any]:
+    filtered = [
+        event for event in events
+        if device_type in str(event.get("device_id") or "").lower()
+    ]
+    last_on = next((event for event in filtered if event.get("command") == "manual_on"), None)
+    return {
+        "has_events": bool(filtered),
+        "events_count": len(filtered),
+        "manual_on_count": sum(1 for event in filtered if event.get("command") == "manual_on"),
+        "manual_off_count": sum(1 for event in filtered if event.get("command") == "manual_off"),
+        "last_on_at": last_on.get("created_at") if last_on else None,
+        "last_on_minutes_ago": event_minutes_ago(last_on.get("created_at")) if last_on else None,
+        "events": filtered,
+    }
+
+
+def execute_farm_ai_tool(name: str, arguments: dict) -> dict[str, Any]:
+    try:
+        args = arguments if isinstance(arguments, dict) else {}
+        if name == "get_current_metrics_tool":
+            return {"ok": True, "metrics": get_current_metrics()}
+
+        if name == "get_active_cycle_tool":
+            tray_id = str(args.get("tray_id") or "tray_1")
+            return {"ok": True, "tray_id": tray_id, "active_cycle": get_active_cycle_ai_context(tray_id)}
+
+        if name == "get_device_events_tool":
+            tray_id = str(args.get("tray_id") or "tray_1")
+            hours = normalize_tool_hours(args.get("hours"), 24)
+            requested_devices = args.get("device_types")
+            if not isinstance(requested_devices, list):
+                requested_devices = []
+            device_types = [
+                str(device_type).lower()
+                for device_type in requested_devices
+                if str(device_type).lower() in KNOWN_DEVICE_TYPES
+            ]
+            if not device_types:
+                return {"ok": False, "error": "device_types must include at least one of: pump, fan, light"}
+            events = get_recent_device_events(tray_id=tray_id, hours=hours, limit=200)
+            return {
+                "ok": True,
+                "tray_id": tray_id,
+                "hours": hours,
+                "devices": {
+                    device_type: summarize_device_events(events, device_type)
+                    for device_type in device_types
+                },
+            }
+
+        if name == "get_recent_anomalies_tool":
+            hours = normalize_tool_hours(args.get("hours"), 24)
+            event_types = args.get("event_types")
+            events = get_recent_anomaly_events(hours)
+            if isinstance(event_types, list) and event_types:
+                allowed = {str(event_type) for event_type in event_types}
+                events = [event for event in events if str(event.get("event_type")) in allowed]
+            return {"ok": True, "hours": hours, "event_types": event_types, "events": events}
+
+        if name == "get_crop_card_tool":
+            crop_name_or_slug = str(args.get("crop_name_or_slug") or "").strip()
+            if not crop_name_or_slug:
+                return {"ok": False, "error": "crop_name_or_slug is required"}
+            suitability = classify_crop_suitability_for_city_farm(crop_name_or_slug)
+            status = suitability["status"]
+            if status == "db_supported":
+                return {
+                    "ok": True,
+                    "supported": True,
+                    "suitability_status": status,
+                    "card": suitability.get("card"),
+                }
+            if status == "compatible_not_in_db":
+                return {
+                    "ok": True,
+                    "supported": False,
+                    "suitability_status": status,
+                    "requested_crop": crop_name_or_slug,
+                    "normalized_crop": suitability.get("normalized_crop"),
+                    "policy": "Культура подходит для компактной гидропонной сити-фермы, но её точной АгроТехКарты пока нет в БД. Можно дать только общую справку без точных норм проекта.",
+                    "supported_crops": suitability.get("supported_crops", []),
+                }
+            if status == "advanced_or_unsuitable":
+                return {
+                    "ok": False,
+                    "supported": False,
+                    "suitability_status": status,
+                    "requested_crop": crop_name_or_slug,
+                    "normalized_crop": suitability.get("normalized_crop"),
+                    "policy": "Эта культура не является подходящей для текущей маленькой сити-фермы со стаканчиками. Не давай подробную агротехнику как для поддерживаемой культуры. Коротко объясни ограничение и предложи подходящие культуры.",
+                    "supported_crops": suitability.get("supported_crops", []),
+                }
+            return {
+                "ok": False,
+                "supported": False,
+                "suitability_status": "unknown",
+                "requested_crop": crop_name_or_slug,
+                "normalized_crop": suitability.get("normalized_crop"),
+                "policy": "Культура не найдена в БД и не классифицирована как подходящая для текущей компактной сити-фермы. Не давай подробные нормы. Предложи выбрать поддерживаемые культуры.",
+                "supported_crops": suitability.get("supported_crops", []),
+            }
+
+        if name == "get_metric_history_tool":
+            metric_name = str(args.get("metric_name") or "").strip().lower()
+            hours = normalize_tool_hours(args.get("hours"), 24)
+            if metric_name not in {"temperature", "humidity", "water_temp", "ph", "ec"}:
+                return {"ok": False, "error": f"unknown metric_name: {metric_name}"}
+            return {"ok": True, "metric_name": metric_name, "hours": hours, "history": get_hourly_history(metric_name, hours)}
+
+        return {"ok": False, "error": f"unknown tool: {name}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+    try:
+        parsed = json.loads(raw_arguments or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def serialize_tool_call(tool_call: Any) -> dict[str, Any]:
+    return {
+        "id": tool_call.id,
+        "type": "function",
+        "function": {
+            "name": tool_call.function.name,
+            "arguments": tool_call.function.arguments or "{}",
+        },
+    }
+
+
+FARM_TOOL_ANALYSIS_STEPS = {
+    "get_current_metrics_tool": "Получаю текущие показатели фермы через tool",
+    "get_active_cycle_tool": "Получаю активный цикл выращивания через tool",
+    "get_device_events_tool": "Получаю историю device_events через tool",
+    "get_recent_anomalies_tool": "Получаю недавние anomaly_events через tool",
+    "get_crop_card_tool": "Получаю АгроТехКарту культуры через tool",
+    "get_metric_history_tool": "Получаю историю метрики через tool",
+}
+
+
 async def ask_ai(
     system_prompt: str,
     user_prompt: str,
     message_history: list = None,
     analysis_steps: list[str] | None = None,
 ) -> str:
-    # Собираем контекст сообщений
     messages = [{"role": "system", "content": system_prompt}]
     if message_history:
         messages.extend(message_history)
@@ -674,56 +1212,50 @@ async def ask_ai(
 
     model_name = os.getenv("AI_MODEL", "gpt-5.4-mini")
 
-    # Цикл агента (максимум 5 шагов, чтобы избежать бесконечного зацикливания)
-    for _ in range(5):
-        try:
+    try:
+        for _ in range(2):
             response = await client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                tools=TOOLS_SCHEMA,
+                tools=FARM_AI_TOOLS,
                 tool_choice="auto",
-                temperature=0.2
+                temperature=0.2,
             )
 
             message = response.choices[0].message
-            messages.append(message) # Добавляем ответ модели в историю
+            tool_calls = message.tool_calls or []
+            assistant_message = {
+                "role": "assistant",
+                "content": message.content or "",
+            }
+            if tool_calls:
+                assistant_message["tool_calls"] = [serialize_tool_call(tool_call) for tool_call in tool_calls]
+            messages.append(assistant_message)
 
-            # Если ИИ не вызывает функции, значит это финальный текстовый ответ
-            if not message.tool_calls:
-                return message.content
+            if not tool_calls:
+                return sanitize_ai_reply(message.content or "")
 
-            # Если ИИ хочет вызвать функции, выполняем их
-            for tool_call in message.tool_calls:
-                func_name = tool_call.function.name
-                args = json.loads(tool_call.function.arguments)
-
-                if func_name == "get_current_metrics":
-                    add_analysis_step(analysis_steps, "Получаю текущие показатели фермы")
-                    result = get_current_metrics()
-                elif func_name == "get_history":
-                    add_analysis_step(analysis_steps, "Получаю почасовую историю показателей")
-                    result = get_history(args.get("metric_name"), args.get("hours", 24))
-                elif func_name == "get_crop_agrotech_card":
-                    add_analysis_step(analysis_steps, "Проверяю АгроТехКарту выбранной культуры из БД")
-                    result = get_crop_agrotech_card(args.get("crop_name"))
-                elif func_name == "get_recent_anomalies":
-                    add_analysis_step(analysis_steps, "Проверяю последние события anomaly_events")
-                    result = get_recent_anomalies(args.get("hours", 24))
-                else:
-                    result = {"error": f"Неизвестная функция {func_name}"}
-
-                # Добавляем результат функции в историю сообщений
+            for tool_call in tool_calls:
+                tool_name = tool_call.function.name
+                tool_args = parse_tool_arguments(tool_call.function.arguments)
+                print(f"[AI_TOOL] {tool_name} args={json.dumps(tool_args, ensure_ascii=False)}")
+                add_analysis_step(analysis_steps, FARM_TOOL_ANALYSIS_STEPS.get(tool_name, f"Выполняю tool {tool_name}"))
+                result = execute_farm_ai_tool(tool_name, tool_args)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "name": func_name,
-                    "content": json.dumps(result, ensure_ascii=False)
+                    "name": tool_name,
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
                 })
 
-        except Exception as e:
-            return f"Ошибка при обращении к ИИ: {str(e)}"
-
-    return "Я слишком долго думал над этим вопросом и запутался. Пожалуйста, переформулируйте."
+        final_response = await client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+        )
+        return sanitize_ai_reply(final_response.choices[0].message.content or "")
+    except Exception as e:
+        return f"Ошибка при обращении к ИИ: {str(e)}"
 
 
 def get_latest_data_snapshot() -> dict[str, Any]:
@@ -860,6 +1392,49 @@ def detect_farm_question_topics(message: str) -> set[str]:
     }
 
 
+FARM_FOLLOW_UP_MARKERS = (
+    "он", "она", "оно", "они", "его", "ее", "сколько", "сколько раз",
+    "когда", "давно", "последний раз", "как часто", "включался",
+    "выключался", "срабатывал", "добавлять", "нужно ли", "нормально ли",
+    "а сейчас", "а почему", "давай", "проверь",
+)
+
+
+def get_recent_dialog_text(messages, current_message, limit=6) -> str:
+    parts: list[str] = []
+    if isinstance(messages, list):
+        for item in messages[-limit:]:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("content") or item.get("text") or "").strip()
+            if text:
+                parts.append(text)
+
+    current_text = str(current_message or "").strip()
+    if current_text:
+        parts.append(current_text)
+
+    return " ".join(parts)
+
+
+def is_farm_follow_up_message(message: str) -> bool:
+    text = str(message or "").lower().replace("ё", "е")
+    return any(marker in text for marker in FARM_FOLLOW_UP_MARKERS)
+
+
+def detect_farm_question_topics_from_dialog(current_message: str, messages: list | None = None) -> set[str]:
+    current_topics = detect_farm_question_topics(current_message)
+    if current_topics:
+        return current_topics
+
+    recent_dialog_text = get_recent_dialog_text(messages, current_message)
+    recent_topics = detect_farm_question_topics(recent_dialog_text)
+    if recent_topics and is_farm_follow_up_message(current_message):
+        return recent_topics
+
+    return recent_topics
+
+
 def format_norm_for_fact(norms: dict[str, Any], metric_name: str) -> str:
     value = norms.get(metric_name) if isinstance(norms, dict) else None
     if isinstance(value, dict) and "min" in value and "max" in value:
@@ -920,8 +1495,8 @@ def build_device_events_fact_lines(
     return lines
 
 
-def build_farm_facts_context_for_prompt(message: str, tray_id: str = "tray_1") -> str:
-    topics = detect_farm_question_topics(message)
+def build_farm_facts_context_for_prompt(message: str, tray_id: str = "tray_1", messages: list | None = None) -> str:
+    topics = detect_farm_question_topics_from_dialog(message, messages)
     if not topics:
         return ""
 
@@ -1027,15 +1602,73 @@ def build_farm_facts_context_for_prompt(message: str, tray_id: str = "tray_1") -
     return "\n".join(lines)
 
 
+def resolve_crop_context_target(message: str, messages: list | None = None, tray_id: str = "tray_1") -> tuple[str | None, str | None]:
+    current_crop = extract_last_explicit_crop_from_messages(None, message)
+    if current_crop:
+        return current_crop, "explicit_crop_from_history"
+
+    if not is_crop_follow_up_message(message):
+        return None, None
+
+    history_crop = extract_last_explicit_crop_from_messages(messages)
+    if history_crop:
+        return history_crop, "explicit_crop_from_history"
+
+    active_cycle = get_active_cycle_ai_context(tray_id)
+    if isinstance(active_cycle, dict) and active_cycle.get("crop_slug"):
+        return str(active_cycle["crop_slug"]), "active_cycle_fallback"
+
+    return None, None
+
+
+def build_crop_context_for_prompt(message: str, messages: list | None = None, tray_id: str = "tray_1") -> str:
+    crop_slug, source = resolve_crop_context_target(message, messages, tray_id)
+    if not crop_slug or not source:
+        return ""
+
+    card = get_crop_agrotech_card_from_db(crop_slug)
+    if not card:
+        return ""
+
+    norms = card.get("norms") if isinstance(card.get("norms"), dict) else {}
+    sections = card.get("sections") if isinstance(card.get("sections"), list) else []
+    source_rule = (
+        "Пользователь, вероятно, продолжает говорить об этой культуре."
+        if source == "explicit_crop_from_history"
+        else "Если пользователь не уточнил иную культуру, ориентируйся на активную культуру."
+    )
+
+    return "\n".join([
+        "Контекст культуры из АгроТехКарты:",
+        f"- source: {source}",
+        f"- rule: {source_rule}",
+        f"- crop_slug: {card.get('crop_slug')}",
+        f"- crop_name_ru: {card.get('crop_name_ru')}",
+        f"- crop_type: {card.get('crop_type')}",
+        f"- version_label: {card.get('version_label')}",
+        f"- norms: {json.dumps(norms, ensure_ascii=False)}",
+        f"- sections: {json.dumps(sections, ensure_ascii=False)}",
+    ])
+
+
 def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None) -> str:
     translated_data_string = format_latest_data_for_prompt()
-    farm_facts_context = build_farm_facts_context_for_prompt(message, "tray_1")
+    farm_facts_context = build_farm_facts_context_for_prompt(message, "tray_1", messages=history)
+    crop_context = build_crop_context_for_prompt(message, messages=history, tray_id="tray_1")
     prompt_parts = [
         f"Данные датчиков: {translated_data_string}",
         format_active_cycle_for_prompt("tray_1"),
+        (
+            "Политика культур текущей фермы:\n"
+            "- точные рекомендации даются по культурам из БД АгроТехКарт;\n"
+            "- общие справки допустимы только по культурам, подходящим для компактной гидропоники;\n"
+            "- крупные плодоносящие, корнеплодные и требующие опоры культуры не считать подходящими для этой установки без отдельной АгроТехКарты."
+        ),
     ]
     if farm_facts_context:
         prompt_parts.append(farm_facts_context)
+    if crop_context:
+        prompt_parts.append(crop_context)
 
     if history:
         history_lines: list[str] = []
@@ -1438,7 +2071,7 @@ async def chat_with_ai(request: ChatRequest) -> dict[str, Any]:
             enriched_prompt = f"{unsupported_crop_context}\n\n{enriched_prompt}"
 
     try:
-        reply = await ask_ai(CHAT_SYSTEM_PROMPT, enriched_prompt, None, analysis_steps)
+        reply = await ask_ai(CHAT_SYSTEM_PROMPT, enriched_prompt, history, analysis_steps)
     except Exception as exc:
         analysis_steps.append("Формирую итоговый ответ")
         return {
@@ -1449,6 +2082,7 @@ async def chat_with_ai(request: ChatRequest) -> dict[str, Any]:
 
     if not reply:
         reply = "Недостаточно данных для ответа."
+    reply = sanitize_ai_reply(reply)
 
     analysis_steps.append("Формирую итоговый ответ")
     await asyncio.to_thread(
