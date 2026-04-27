@@ -4,6 +4,7 @@ import json
 import os
 import re
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,6 +37,7 @@ from db import (
     get_database_model_summary,
     get_last_climate_records,
     get_recent_anomaly_events,
+    get_recent_device_events,
     get_recent_ai_logs,
     get_recent_hourly_summary,
     get_recent_telemetry,
@@ -101,7 +103,11 @@ CHAT_SYSTEM_PROMPT = (
     "8. Ограничения языка: Отвечай на русском языке. Обозначения pH и EC разрешены. "
     "Если backend передал crop_name_ru, используй только русское название культуры. "
     "crop_slug используй только внутренне; не пиши пользователю arugula, lettuce, basil и другие slug, если есть русское имя. "
-    "Запрещено использовать программный код, теги или markdown-разметку. Пиши чистым, обычным текстом."
+    "Запрещено использовать программный код, теги или markdown-разметку. Пиши чистым, обычным текстом.\n"
+    "9. Если backend передал расширенный контекст фермы, используй его как факты. "
+    "Не придумывай историю устройств, если её нет в device_events. "
+    "Не говори, что полив в норме, если нет истории насоса и нет достаточных данных влажности. "
+    "Для pH/EC не советуй добавлять щёлочь, кислоту или менять раствор без текущего значения pH/EC."
 )
 
 CROP_ALIASES: dict[str, tuple[str, ...]] = {
@@ -826,12 +832,210 @@ def format_active_cycle_for_prompt(tray_id: str = "tray_1") -> str:
     return "\n".join(lines)
 
 
+def detect_farm_question_topics(message: str) -> set[str]:
+    text = str(message or "").lower().replace("ё", "е")
+    topic_keywords = {
+        "watering": (
+            "полив", "поливом", "насос", "насосы", "орошение", "вода для полива",
+            "увлажнение", "влажность", "субстрат",
+        ),
+        "temperature": (
+            "температура", "жарко", "холодно", "перегрев", "охлаждение", "воздух",
+        ),
+        "solution": (
+            "ph", "pH", "ec", "раствор", "питательный раствор", "кислотность",
+            "щелочь", "щелоч", "кислота", "концентрация", "соли",
+        ),
+        "light": (
+            "свет", "освещение", "лампа", "фитолампа",
+        ),
+        "general": (
+            "все ли нормально", "всё ли нормально", "состояние фермы", "как ферма", "что с фермой",
+        ),
+    }
+    return {
+        topic
+        for topic, keywords in topic_keywords.items()
+        if any(keyword.lower().replace("ё", "е") in text for keyword in keywords)
+    }
+
+
+def format_norm_for_fact(norms: dict[str, Any], metric_name: str) -> str:
+    value = norms.get(metric_name) if isinstance(norms, dict) else None
+    if isinstance(value, dict) and "min" in value and "max" in value:
+        return f"{value['min']}–{value['max']}"
+    if value is not None:
+        return format_ai_norm_value(value)
+    return "нет нормы в активной АгроТехКарте"
+
+
+def parse_event_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    for candidate in (text, text.replace(" ", "T"), text.replace("Z", "+00:00")):
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            continue
+    return None
+
+
+def format_event_age(value: Any) -> str:
+    event_time = parse_event_timestamp(value)
+    if event_time is None:
+        return "время неизвестно"
+    now = datetime.now(event_time.tzinfo) if event_time.tzinfo else datetime.now()
+    minutes = max(0, int((now - event_time).total_seconds() // 60))
+    if minutes < 60:
+        return f"{minutes} минут назад"
+    hours = minutes // 60
+    rest_minutes = minutes % 60
+    return f"{hours} ч {rest_minutes} мин назад"
+
+
+def build_device_events_fact_lines(
+    events: list[dict[str, Any]],
+    device_keyword: str,
+    title: str,
+) -> list[str]:
+    filtered = [
+        event for event in events
+        if device_keyword in str(event.get("device_id") or "").lower()
+    ]
+    manual_on_count = sum(1 for event in filtered if event.get("command") == "manual_on")
+    manual_off_count = sum(1 for event in filtered if event.get("command") == "manual_off")
+    last_on = next((event for event in filtered if event.get("command") == "manual_on"), None)
+    lines = [
+        f"- событий {title} за 24 часа: {len(filtered)}",
+        f"- включений {title} за 24 часа: {manual_on_count}",
+        f"- выключений {title} за 24 часа: {manual_off_count}",
+    ]
+    if last_on:
+        lines.append(
+            f"- последнее включение {title}: {last_on.get('created_at')} ({format_event_age(last_on.get('created_at'))})"
+        )
+    else:
+        lines.append(f"- в device_events нет включений {title} за последние 24 часа")
+    return lines
+
+
+def build_farm_facts_context_for_prompt(message: str, tray_id: str = "tray_1") -> str:
+    topics = detect_farm_question_topics(message)
+    if not topics:
+        return ""
+
+    latest_data = get_latest_data_snapshot()
+    active_cycle = get_active_cycle_ai_context(tray_id)
+    norms = active_cycle.get("norms") if isinstance(active_cycle, dict) and isinstance(active_cycle.get("norms"), dict) else {}
+    anomaly_events = get_recent_anomaly_events(24)
+    needs_device_events = bool(topics & {"watering", "light", "temperature", "general"})
+    device_events = get_recent_device_events(tray_id=tray_id, hours=24, limit=100) if needs_device_events else []
+
+    lines = [
+        "Расширенный контекст фермы:",
+        "- темы вопроса: " + ", ".join(sorted(topics)),
+        (
+            "- текущие показатели: "
+            f"air_temp={format_sensor_value(latest_data.get('Температура'), ' C')}; "
+            f"humidity={format_sensor_value(latest_data.get('Влажность'), '%')}; "
+            f"water_temp={format_sensor_value(latest_data.get('Темп. воды'), ' C')}; "
+            f"ph={format_sensor_value(latest_data.get('pH'), '')}; "
+            f"ec={format_sensor_value(latest_data.get('EC'), '')}"
+        ),
+    ]
+
+    if active_cycle:
+        lines.extend([
+            (
+                "- активный цикл: "
+                f"культура={active_cycle.get('crop_name_ru') or active_cycle.get('crop_slug')}; "
+                f"день={active_cycle.get('day_number') or 1}; "
+                f"версия={active_cycle.get('version_label') or 'не указана'}"
+            ),
+            (
+                "- нормы активного цикла: "
+                f"air_temp={format_norm_for_fact(norms, 'air_temp')}; "
+                f"humidity={format_norm_for_fact(norms, 'humidity')}; "
+                f"water_temp={format_norm_for_fact(norms, 'water_temp')}; "
+                f"ph={format_norm_for_fact(norms, 'ph')}; "
+                f"ec={format_norm_for_fact(norms, 'ec')}"
+            ),
+        ])
+    else:
+        lines.append("- активный цикл: не запущен")
+
+    if "watering" in topics:
+        low_humidity_events = [
+            event for event in anomaly_events
+            if event.get("event_type") == "low_humidity"
+        ]
+        lines.append("Контекст полива:")
+        lines.extend(build_device_events_fact_lines(device_events, "pump", "насоса"))
+        lines.extend([
+            f"- текущая влажность: {format_sensor_value(latest_data.get('Влажность'), '%')}",
+            f"- норма влажности активной культуры: {format_norm_for_fact(norms, 'humidity')}",
+            f"- аномалии low_humidity за 24 часа: {'есть' if low_humidity_events else 'нет'}",
+        ])
+
+    if "general" in topics and not (topics & {"watering", "temperature", "light"}):
+        pump_events = [event for event in device_events if "pump" in str(event.get("device_id") or "").lower()]
+        fan_events = [event for event in device_events if "fan" in str(event.get("device_id") or "").lower()]
+        light_events = [event for event in device_events if "light" in str(event.get("device_id") or "").lower()]
+        lines.extend([
+            "Контекст устройств:",
+            f"- событий насоса за 24 часа: {len(pump_events)}",
+            f"- событий вентиляции за 24 часа: {len(fan_events)}",
+            f"- событий освещения за 24 часа: {len(light_events)}",
+        ])
+
+    if "solution" in topics:
+        solution_anomalies = [
+            event for event in anomaly_events
+            if event.get("event_type") in {"low_ph", "high_ph", "low_ec", "high_ec"}
+        ]
+        lines.extend([
+            "Контекст питательного раствора:",
+            f"- текущий pH: {format_sensor_value(latest_data.get('pH'), '')}",
+            f"- текущий EC: {format_sensor_value(latest_data.get('EC'), '')}",
+            f"- норма pH активной культуры: {format_norm_for_fact(norms, 'ph')}",
+            f"- норма EC активной культуры: {format_norm_for_fact(norms, 'ec')}",
+            f"- аномалии low_ph/high_ph/low_ec/high_ec за 24 часа: {'есть' if solution_anomalies else 'нет'}",
+        ])
+
+    if "temperature" in topics:
+        temp_anomalies = [
+            event for event in anomaly_events
+            if event.get("event_type") in {"air_overheat", "air_overcooling", "rapid_air_temp_rise"}
+        ]
+        lines.extend([
+            "Контекст температуры:",
+            f"- текущая температура воздуха: {format_sensor_value(latest_data.get('Температура'), ' C')}",
+            f"- текущая температура воды: {format_sensor_value(latest_data.get('Темп. воды'), ' C')}",
+            f"- норма температуры воздуха: {format_norm_for_fact(norms, 'air_temp')}",
+            f"- норма температуры воды: {format_norm_for_fact(norms, 'water_temp')}",
+        ])
+        lines.extend(build_device_events_fact_lines(device_events, "fan", "вентиляции"))
+        lines.append(
+            f"- аномалии air_overheat/air_overcooling/rapid_air_temp_rise за 24 часа: {'есть' if temp_anomalies else 'нет'}"
+        )
+
+    if "light" in topics:
+        lines.append("Контекст освещения:")
+        lines.extend(build_device_events_fact_lines(device_events, "light", "света"))
+
+    return "\n".join(lines)
+
+
 def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None) -> str:
     translated_data_string = format_latest_data_for_prompt()
+    farm_facts_context = build_farm_facts_context_for_prompt(message, "tray_1")
     prompt_parts = [
         f"Данные датчиков: {translated_data_string}",
         format_active_cycle_for_prompt("tray_1"),
     ]
+    if farm_facts_context:
+        prompt_parts.append(farm_facts_context)
 
     if history:
         history_lines: list[str] = []
