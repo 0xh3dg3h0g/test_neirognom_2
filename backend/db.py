@@ -239,7 +239,7 @@ def infer_device_type_code(device_id: str | None) -> str | None:
     return None
 
 
-def _ensure_device(cursor, device_id: Any, status: str | None = None) -> str | None:
+def _ensure_device(cursor, device_id: Any) -> str | None:
     normalized_device_id = normalize_device_id(device_id)
     if normalized_device_id is None:
         return None
@@ -256,15 +256,14 @@ def _ensure_device(cursor, device_id: Any, status: str | None = None) -> str | N
 
     cursor.execute(
         """
-        INSERT INTO devices (id, status, last_seen, tray_id, device_type_id)
-        VALUES (%s, %s, now(), %s, %s)
+        INSERT INTO devices (id, last_seen, tray_id, device_type_id)
+        VALUES (%s, now(), %s, %s)
         ON CONFLICT (id) DO UPDATE SET
-            status = COALESCE(EXCLUDED.status, devices.status),
             last_seen = EXCLUDED.last_seen,
             tray_id = COALESCE(devices.tray_id, EXCLUDED.tray_id),
             device_type_id = COALESCE(EXCLUDED.device_type_id, devices.device_type_id)
         """,
-        (normalized_device_id, status, tray_id, device_type_id),
+        (normalized_device_id, tray_id, device_type_id),
     )
     return normalized_device_id
 
@@ -510,9 +509,7 @@ def ensure_agrotech_schema(cursor) -> None:
             card_id BIGINT NOT NULL,
             version_major INTEGER NOT NULL,
             version_minor INTEGER NOT NULL,
-            version_label TEXT NOT NULL,
             parent_revision_id BIGINT,
-            params_json JSONB NOT NULL DEFAULT '{}'::jsonb,
             content TEXT NOT NULL,
             source TEXT,
             change_reason TEXT,
@@ -529,8 +526,6 @@ def ensure_agrotech_schema(cursor) -> None:
             card_id BIGINT NOT NULL,
             revision_id BIGINT,
             action TEXT NOT NULL,
-            old_params_json JSONB,
-            new_params_json JSONB,
             reason TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
@@ -738,12 +733,12 @@ def ensure_base_catalog_items(cursor) -> None:
         get_or_create_catalog_item(cursor, category, code, name_ru, unit)
 
 
-def params_json_to_dict(params_json: Any) -> dict[str, Any]:
-    if isinstance(params_json, dict):
-        return params_json
-    if isinstance(params_json, str):
+def json_object_to_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
         try:
-            parsed = json.loads(params_json)
+            parsed = json.loads(value)
         except json.JSONDecodeError:
             return {}
         return parsed if isinstance(parsed, dict) else {}
@@ -767,8 +762,8 @@ def norm_raw_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def save_revision_norms(cursor, revision_id: int, params_json: Any) -> None:
-    params = params_json_to_dict(params_json)
+def save_revision_norms(cursor, revision_id: int, norms_payload: Any) -> None:
+    params = json_object_to_dict(norms_payload)
     if not revision_id or not params:
         return
 
@@ -817,8 +812,10 @@ def save_revision_norms(cursor, revision_id: int, params_json: Any) -> None:
         )
 
 
-def backfill_revision_norms(cursor) -> None:
+def migrate_revision_norms_from_legacy_params_json(cursor) -> None:
     ensure_base_catalog_items(cursor)
+    if not column_exists(cursor, "agrotech_card_revisions", "params_json"):
+        return
     cursor.execute(
         """
         SELECT id, params_json
@@ -827,6 +824,22 @@ def backfill_revision_norms(cursor) -> None:
     )
     for row in cursor.fetchall():
         save_revision_norms(cursor, row["id"], row["params_json"])
+
+
+def drop_agrotech_legacy_columns(cursor) -> None:
+    migrate_revision_norms_from_legacy_params_json(cursor)
+    for column_name in ("params_json", "version_label"):
+        cursor.execute(
+            sql.SQL("ALTER TABLE agrotech_card_revisions DROP COLUMN IF EXISTS {}").format(
+                sql.Identifier(column_name)
+            )
+        )
+    for column_name in ("old_params_json", "new_params_json"):
+        cursor.execute(
+            sql.SQL("ALTER TABLE agrotech_audit_log DROP COLUMN IF EXISTS {}").format(
+                sql.Identifier(column_name)
+            )
+        )
 
 
 def get_revision_norms(cursor, revision_id: int | None) -> dict[str, Any]:
@@ -868,6 +881,18 @@ def get_revision_norms(cursor, revision_id: int | None) -> dict[str, Any]:
                 norms[row["code"]] = row["raw_value"]
 
     return norms
+
+
+def make_version_label(version_major: Any, version_minor: Any) -> str:
+    return f"v{version_major}.{version_minor}"
+
+
+def with_version_label(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    result = dict(row)
+    result["version_label"] = make_version_label(result["version_major"], result["version_minor"])
+    return result
 
 
 def parse_markdown_sections(content: str) -> list[dict[str, Any]]:
@@ -1137,6 +1162,26 @@ def _save_device_event(
     return cursor.fetchone()
 
 
+def get_device_current_status(cursor, device_id: Any) -> str | None:
+    normalized_device_id = normalize_device_id(device_id)
+    if normalized_device_id is None:
+        return None
+    cursor.execute(
+        """
+        SELECT value, command, source
+        FROM device_events
+        WHERE device_id = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (normalized_device_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    return row["value"] or row["command"] or row["source"]
+
+
 def save_device_event(
     device_id: Any,
     tray_id: Any = DEFAULT_TRAY_ID,
@@ -1236,7 +1281,7 @@ def _create_card_revision(
     card_id: int,
     version_major: int,
     version_minor: int,
-    params_json: dict[str, Any] | None,
+    norms_payload: dict[str, Any] | None,
     content: str,
     source: str | None = None,
     change_reason: str | None = None,
@@ -1244,11 +1289,10 @@ def _create_card_revision(
     parent_revision_id: int | None = None,
     is_active: bool = True,
 ) -> dict[str, Any] | None:
-    version_label = f"v{version_major}.{version_minor}"
     cursor.execute(
         """
-        SELECT id, card_id, version_major, version_minor, version_label,
-               parent_revision_id, params_json, content, source,
+        SELECT id, card_id, version_major, version_minor,
+               parent_revision_id, content, source,
                change_reason, created_by, created_at, is_active
         FROM agrotech_card_revisions
         WHERE card_id = %s
@@ -1259,7 +1303,9 @@ def _create_card_revision(
     )
     existing_revision = cursor.fetchone()
     if existing_revision:
-        return existing_revision
+        save_revision_norms(cursor, existing_revision["id"], norms_payload or {})
+        save_card_sections(cursor, existing_revision["id"], content)
+        return with_version_label(existing_revision)
 
     if is_active:
         cursor.execute(
@@ -1275,22 +1321,20 @@ def _create_card_revision(
     cursor.execute(
         """
         INSERT INTO agrotech_card_revisions (
-            card_id, version_major, version_minor, version_label,
-            parent_revision_id, params_json, content, source,
+            card_id, version_major, version_minor,
+            parent_revision_id, content, source,
             change_reason, created_by, is_active
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id, card_id, version_major, version_minor, version_label,
-                  parent_revision_id, params_json, content, source,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, card_id, version_major, version_minor,
+                  parent_revision_id, content, source,
                   change_reason, created_by, created_at, is_active
         """,
         (
             card_id,
             version_major,
             version_minor,
-            version_label,
             parent_revision_id,
-            Jsonb(params_json or {}),
             content,
             source,
             change_reason,
@@ -1298,22 +1342,20 @@ def _create_card_revision(
             is_active,
         ),
     )
-    revision = cursor.fetchone()
-    save_revision_norms(cursor, revision["id"], params_json or {})
+    revision = with_version_label(cursor.fetchone())
+    save_revision_norms(cursor, revision["id"], norms_payload or {})
     save_card_sections(cursor, revision["id"], content)
     cursor.execute(
         """
         INSERT INTO agrotech_audit_log (
-            card_id, revision_id, action, old_params_json,
-            new_params_json, reason, created_at
+            card_id, revision_id, action, reason, created_at
         )
-        VALUES (%s, %s, %s, NULL, %s, %s, now())
+        VALUES (%s, %s, %s, %s, now())
         """,
         (
             card_id,
             revision["id"],
             "create_revision",
-            Jsonb(params_json or {}),
             change_reason,
         ),
     )
@@ -1360,14 +1402,16 @@ def create_card_revision(
     card_id: int,
     version_major: int,
     version_minor: int,
-    params_json: dict[str, Any] | None,
     content: str,
+    norms_payload: dict[str, Any] | None = None,
     source: str | None = None,
     change_reason: str | None = None,
     created_by: str | None = None,
     parent_revision_id: int | None = None,
     is_active: bool = True,
+    params_json: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    resolved_norms_payload = norms_payload if norms_payload is not None else params_json
     with get_connection() as connection:
         with connection.cursor() as cursor:
             return _create_card_revision(
@@ -1375,7 +1419,7 @@ def create_card_revision(
                 card_id=card_id,
                 version_major=version_major,
                 version_minor=version_minor,
-                params_json=params_json,
+                norms_payload=resolved_norms_payload,
                 content=content,
                 source=source,
                 change_reason=change_reason,
@@ -1398,7 +1442,7 @@ def _import_crop_cards_from_md(cursor) -> int:
         slug = extract_crop_slug(content, path.stem)
         title = extract_card_title(content, slug)
         crop_type = extract_first_nonempty_line(content, "Тип культуры")
-        params_json = parse_agrotech_params(content)
+        norms_payload = parse_agrotech_params(content)
 
         crop = _get_or_create_crop(
             cursor,
@@ -1420,7 +1464,7 @@ def _import_crop_cards_from_md(cursor) -> int:
             card_id=card["id"],
             version_major=1,
             version_minor=0,
-            params_json=params_json,
+            norms_payload=norms_payload,
             content=content,
             source=f"crops_data/{path.name}",
             change_reason="Initial import from Markdown",
@@ -1453,9 +1497,7 @@ def _get_active_card_revision(cursor, crop_slug: str) -> dict[str, Any] | None:
             agrotech_card_revisions.id AS revision_id,
             agrotech_card_revisions.version_major,
             agrotech_card_revisions.version_minor,
-            agrotech_card_revisions.version_label,
             agrotech_card_revisions.parent_revision_id,
-            agrotech_card_revisions.params_json,
             agrotech_card_revisions.content,
             agrotech_card_revisions.source,
             agrotech_card_revisions.change_reason,
@@ -1472,7 +1514,7 @@ def _get_active_card_revision(cursor, crop_slug: str) -> dict[str, Any] | None:
         """,
         (crop_slug,),
     )
-    return cursor.fetchone()
+    return with_version_label(cursor.fetchone())
 
 
 def get_active_card_revision(crop_slug: str) -> dict[str, Any] | None:
@@ -1504,8 +1546,7 @@ def get_crop_agrotech_card_from_db(crop_name_or_slug: Any) -> dict[str, Any] | N
                     agrotech_cards.id AS card_id,
                     agrotech_card_revisions.id AS revision_id,
                     agrotech_card_revisions.version_major,
-                    agrotech_card_revisions.version_minor,
-                    agrotech_card_revisions.version_label
+                    agrotech_card_revisions.version_minor
                 FROM crops
                 JOIN agrotech_cards ON agrotech_cards.crop_id = crops.id
                 JOIN agrotech_card_revisions
@@ -1537,7 +1578,7 @@ def get_crop_agrotech_card_from_db(crop_name_or_slug: Any) -> dict[str, Any] | N
             )
             sections = cursor.fetchall()
 
-    version_label = row["version_label"] or f"v{row['version_major']}.{row['version_minor']}"
+    version_label = make_version_label(row["version_major"], row["version_minor"])
     return {
         "crop_slug": row["crop_slug"],
         "crop_name_ru": row["crop_name_ru"],
@@ -1731,6 +1772,9 @@ def ensure_anomaly_event_refs_schema(cursor) -> None:
 
 def backfill_anomaly_event_refs(cursor) -> int:
     ensure_anomaly_event_refs_schema(cursor)
+    legacy_columns = ("sensor_type", "event_type", "metric_name", "severity")
+    if not all(column_exists(cursor, "anomaly_events", column_name) for column_name in legacy_columns):
+        return 0
     cursor.execute(
         """
         SELECT
@@ -1770,6 +1814,16 @@ def backfill_anomaly_event_refs(cursor) -> int:
             ),
         )
     return len(rows)
+
+
+def drop_anomaly_legacy_columns(cursor) -> None:
+    backfill_anomaly_event_refs(cursor)
+    for column_name in ("sensor_type", "event_type", "metric_name", "severity"):
+        cursor.execute(
+            sql.SQL("ALTER TABLE anomaly_events DROP COLUMN IF EXISTS {}").format(
+                sql.Identifier(column_name)
+            )
+        )
 
 
 def ensure_cycle_results_schema(cursor) -> None:
@@ -2021,12 +2075,10 @@ def ensure_ai_logs_schema(cursor) -> None:
         CREATE TABLE IF NOT EXISTS ai_logs (
             id BIGSERIAL PRIMARY KEY,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
-            thought TEXT,
-            commands_json JSONB
+            thought TEXT
         )
         """
     )
-    ensure_jsonb_column(cursor, "ai_logs", "commands_json")
     cursor.execute("ALTER TABLE ai_logs ADD COLUMN IF NOT EXISTS cycle_id BIGINT")
     cursor.execute("ALTER TABLE ai_logs ADD COLUMN IF NOT EXISTS source TEXT")
     cursor.execute(
@@ -2051,36 +2103,142 @@ def ensure_ai_logs_schema(cursor) -> None:
     )
 
 
-def ensure_legacy_schema_comments(cursor) -> None:
-    if column_exists(cursor, "agrotech_card_revisions", "params_json"):
+def ensure_ai_log_commands_schema(cursor) -> None:
+    ensure_device_relationship_columns(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_log_commands (
+            id BIGSERIAL PRIMARY KEY,
+            ai_log_id BIGINT NOT NULL,
+            device_id TEXT,
+            command TEXT,
+            value TEXT,
+            payload JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ai_log_commands_ai_log_id
+        ON ai_log_commands(ai_log_id)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ai_log_commands_device_created_at
+        ON ai_log_commands(device_id, created_at DESC)
+        """
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "ai_log_commands",
+        "fk_ai_log_commands_ai_log_id_ai_logs",
+        "ai_log_id",
+        "ai_logs",
+        "id",
+    )
+    add_foreign_key_if_missing(
+        cursor,
+        "ai_log_commands",
+        "fk_ai_log_commands_device_id_devices",
+        "device_id",
+        "devices",
+        "id",
+    )
+
+
+def normalize_ai_log_command_items(commands: Any) -> list[Any]:
+    if isinstance(commands, list):
+        return commands
+    if isinstance(commands, dict):
+        return [commands]
+    if commands is None:
+        return []
+    return [{"payload": commands}]
+
+
+def save_ai_log_commands(cursor, ai_log_id: int, commands: Any) -> None:
+    for item in normalize_ai_log_command_items(commands):
+        payload = item if isinstance(item, dict) else {"payload": item}
+        device_id = normalize_device_id(
+            payload.get("device_id")
+            or payload.get("device")
+            or payload.get("type")
+            or payload.get("target")
+        )
+        if device_id is not None:
+            _ensure_device(cursor, device_id)
+        command = payload.get("command") or payload.get("action")
+        value = payload.get("value") or payload.get("state")
         cursor.execute(
             """
-            COMMENT ON COLUMN agrotech_card_revisions.params_json IS
-            'Legacy/cache fallback. Primary agrotech norms are stored in agrotech_revision_norms.'
-            """
+            INSERT INTO ai_log_commands (
+                ai_log_id, device_id, command, value, payload, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, now())
+            """,
+            (
+                ai_log_id,
+                device_id,
+                str(command) if command is not None else None,
+                str(value) if value is not None else None,
+                Jsonb(payload),
+            ),
         )
-    if column_exists(cursor, "ai_logs", "commands_json"):
-        cursor.execute(
-            """
-            COMMENT ON COLUMN ai_logs.commands_json IS
-            'Legacy JSON snapshot of AI commands. Normalized AI context is cycle_id/source plus report tables.'
-            """
-        )
-    if column_exists(cursor, "devices", "status"):
-        cursor.execute(
-            """
-            COMMENT ON COLUMN devices.status IS
-            'Cache of the current device state kept for dashboard compatibility.'
-            """
-        )
+
+
+def migrate_ai_log_commands_from_legacy(cursor) -> None:
+    if not column_exists(cursor, "ai_logs", "commands_json"):
+        return
+    ensure_jsonb_column(cursor, "ai_logs", "commands_json")
+    cursor.execute(
+        """
+        SELECT id, commands_json
+        FROM ai_logs
+        WHERE commands_json IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM ai_log_commands
+              WHERE ai_log_commands.ai_log_id = ai_logs.id
+          )
+        ORDER BY id ASC
+        """
+    )
+    for row in cursor.fetchall():
+        save_ai_log_commands(cursor, row["id"], row["commands_json"])
+    cursor.execute("ALTER TABLE ai_logs DROP COLUMN IF EXISTS commands_json")
+
+
+def drop_strict_3nf_legacy_objects(cursor) -> None:
+    cursor.execute("ALTER TABLE devices DROP COLUMN IF EXISTS status")
+    cursor.execute("DROP TABLE IF EXISTS telemetry_raw")
+    cursor.execute("DROP TABLE IF EXISTS telemetry_hourly")
+
+
+def get_strict_3nf_runtime_checks() -> dict[str, Any]:
+    return {
+        "status": "strict_3nf_model",
+        "runtime_uses_telemetry_raw": False,
+        "runtime_uses_telemetry_hourly": False,
+        "uses_params_json_as_runtime_source": False,
+        "uses_commands_json_as_runtime_source": False,
+        "uses_devices_status_as_runtime_source": False,
+        "agrotech_norm_source": "agrotech_revision_norms",
+        "telemetry_source": "telemetry_readings + telemetry_values",
+        "hourly_source": "telemetry_hourly_values",
+        "ai_commands_source": "ai_log_commands",
+        "device_status_source": "device_events",
+        "anomaly_catalog_source": "catalog_items",
+    }
 
 
 def get_database_model_summary() -> dict[str, Any]:
     return {
-        "status": "3nf_primary_model_with_legacy_compatibility",
+        "status": "strict_3nf_model",
         "note": (
-            "Основная модель хранится в нормализованных таблицах. "
-            "Legacy-поля и таблицы оставлены для совместимости с dashboard и старым кодом."
+            "Backend использует только нормализованные таблицы. "
+            "API-ответы собираются из 3НФ-модели без runtime-обращений к старым таблицам и полям."
         ),
         "catalogs": ["catalog_items"],
         "agrotech": [
@@ -2094,18 +2252,15 @@ def get_database_model_summary() -> dict[str, Any]:
         "farm_structure": ["trays", "devices", "device_events"],
         "growing": ["growing_cycles", "cycle_results"],
         "telemetry": ["telemetry_readings", "telemetry_values", "telemetry_hourly_values"],
-        "alerts": ["anomaly_events with catalog refs"],
+        "alerts": ["anomaly_events"],
         "ai": [
-            "ai_logs with cycle_id/source",
+            "ai_logs",
+            "ai_log_commands",
             "advisor_reports",
             "advisor_report_findings",
             "advisor_report_recommendations",
         ],
-        "legacy_compatibility": [
-            "params_json",
-            "commands_json",
-            "devices.status",
-        ],
+        "runtime_checks": get_strict_3nf_runtime_checks(),
     }
 
 
@@ -2344,7 +2499,7 @@ def row_to_growing_cycle(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "crop_slug": row["crop_slug"],
         "crop_name_ru": row["crop_name_ru"],
         "card_revision_id": row["card_revision_id"],
-        "version_label": row["version_label"],
+        "version_label": row.get("version_label") or make_version_label(row["version_major"], row["version_minor"]),
         "started_at": format_timestamp(row["started_at"]),
         "finished_at": format_timestamp(row["finished_at"]) if row["finished_at"] is not None else None,
         "day_number": calculate_cycle_day_number(
@@ -2367,7 +2522,8 @@ def _select_growing_cycle_by_id(cursor, cycle_id: int) -> dict[str, Any] | None:
             growing_cycles.finished_at,
             crops.slug AS crop_slug,
             crops.name_ru AS crop_name_ru,
-            agrotech_card_revisions.version_label
+            agrotech_card_revisions.version_major,
+            agrotech_card_revisions.version_minor
         FROM growing_cycles
         JOIN crops ON crops.id = growing_cycles.crop_id
         JOIN agrotech_card_revisions
@@ -2376,7 +2532,7 @@ def _select_growing_cycle_by_id(cursor, cycle_id: int) -> dict[str, Any] | None:
         """,
         (cycle_id,),
     )
-    return cursor.fetchone()
+    return with_version_label(cursor.fetchone())
 
 
 def _get_current_growing_cycle(cursor, tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any] | None:
@@ -2392,7 +2548,8 @@ def _get_current_growing_cycle(cursor, tray_id: str = DEFAULT_TRAY_ID) -> dict[s
             growing_cycles.finished_at,
             crops.slug AS crop_slug,
             crops.name_ru AS crop_name_ru,
-            agrotech_card_revisions.version_label
+            agrotech_card_revisions.version_major,
+            agrotech_card_revisions.version_minor
         FROM growing_cycles
         JOIN crops ON crops.id = growing_cycles.crop_id
         JOIN agrotech_card_revisions
@@ -2404,7 +2561,7 @@ def _get_current_growing_cycle(cursor, tray_id: str = DEFAULT_TRAY_ID) -> dict[s
         """,
         (normalized_tray_id,),
     )
-    return cursor.fetchone()
+    return with_version_label(cursor.fetchone())
 
 
 def get_available_crops() -> list[dict[str, Any]]:
@@ -2419,7 +2576,8 @@ def get_available_crops() -> list[dict[str, Any]]:
                     crops.crop_type,
                     agrotech_cards.id AS card_id,
                     agrotech_card_revisions.id AS active_revision_id,
-                    agrotech_card_revisions.version_label
+                    agrotech_card_revisions.version_major,
+                    agrotech_card_revisions.version_minor
                 FROM crops
                 JOIN agrotech_cards ON agrotech_cards.crop_id = crops.id
                 JOIN agrotech_card_revisions
@@ -2428,7 +2586,7 @@ def get_available_crops() -> list[dict[str, Any]]:
                 ORDER BY crops.slug
                 """
             )
-            return cursor.fetchall()
+            return [with_version_label(row) for row in cursor.fetchall()]
 
 
 def get_current_growing_cycle(tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any] | None:
@@ -2453,7 +2611,8 @@ def get_active_cycle_ai_context(tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any
                     crops.crop_type,
                     agrotech_cards.id AS card_id,
                     agrotech_card_revisions.id AS revision_id,
-                    agrotech_card_revisions.version_label,
+                    agrotech_card_revisions.version_major,
+                    agrotech_card_revisions.version_minor,
                     agrotech_card_revisions.content
                 FROM growing_cycles
                 JOIN crops ON crops.id = growing_cycles.crop_id
@@ -2469,9 +2628,10 @@ def get_active_cycle_ai_context(tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any
                 (normalized_tray_id,),
             )
             row = cursor.fetchone()
-            params_json = {}
+            norms = {}
             if row is not None:
-                params_json = get_revision_norms(cursor, row["revision_id"])
+                row = with_version_label(row)
+                norms = get_revision_norms(cursor, row["revision_id"])
 
     if row is None:
         return None
@@ -2488,7 +2648,7 @@ def get_active_cycle_ai_context(tray_id: str = DEFAULT_TRAY_ID) -> dict[str, Any
         "card_id": row["card_id"],
         "revision_id": row["revision_id"],
         "version_label": row["version_label"],
-        "params_json": params_json,
+        "norms": norms,
         "content": row["content"],
     }
 
@@ -2632,12 +2792,10 @@ def init_db() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS devices (
                     id TEXT PRIMARY KEY,
-                    status TEXT,
                     last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
             )
-            cursor.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS status TEXT")
             cursor.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ")
             cursor.execute("UPDATE devices SET last_seen = now() WHERE last_seen IS NULL")
             cursor.execute("ALTER TABLE devices ALTER COLUMN last_seen SET DEFAULT now()")
@@ -2649,10 +2807,6 @@ def init_db() -> None:
                 CREATE TABLE IF NOT EXISTS anomaly_events (
                     id BIGSERIAL PRIMARY KEY,
                     tray_id TEXT,
-                    sensor_type TEXT,
-                    event_type TEXT,
-                    metric_name TEXT,
-                    severity TEXT,
                     value DOUBLE PRECISION,
                     message TEXT,
                     payload JSONB,
@@ -2661,15 +2815,12 @@ def init_db() -> None:
                 """
             )
             cursor.execute(
-                "ALTER TABLE anomaly_events ADD COLUMN IF NOT EXISTS metric_name TEXT"
-            )
-            cursor.execute(
                 "ALTER TABLE anomaly_events ADD COLUMN IF NOT EXISTS value DOUBLE PRECISION"
             )
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_anomaly_events_recent
-                ON anomaly_events(tray_id, event_type, metric_name, created_at DESC)
+                ON anomaly_events(tray_id, created_at DESC)
                 """
             )
             cursor.execute(
@@ -2692,15 +2843,19 @@ def init_db() -> None:
             ensure_telemetry_normalized_schema(cursor)
             ensure_telemetry_hourly_values_schema(cursor)
             _import_crop_cards_from_md(cursor)
-            backfill_revision_norms(cursor)
+            migrate_revision_norms_from_legacy_params_json(cursor)
             backfill_card_sections(cursor)
+            drop_agrotech_legacy_columns(cursor)
             ensure_growing_cycles_schema(cursor)
             ensure_anomaly_event_refs_schema(cursor)
             backfill_anomaly_event_refs(cursor)
+            drop_anomaly_legacy_columns(cursor)
             ensure_cycle_results_schema(cursor)
             ensure_advisor_reports_schema(cursor)
             ensure_ai_logs_schema(cursor)
-            ensure_legacy_schema_comments(cursor)
+            ensure_ai_log_commands_schema(cursor)
+            migrate_ai_log_commands_from_legacy(cursor)
+            drop_strict_3nf_legacy_objects(cursor)
 
 
 def parse_json_value(payload: Any) -> Any:
@@ -2756,7 +2911,7 @@ def update_device_status(device_id: str) -> None:
                 ensure_tray(cursor, normalized_device_id)
                 return
 
-            _ensure_device(cursor, normalized_device_id, "online")
+            _ensure_device(cursor, normalized_device_id)
             tray_id = DEFAULT_TRAY_ID
             _save_device_event(
                 cursor,
@@ -2903,7 +3058,7 @@ def ensure_telemetry_normalized_schema(cursor) -> None:
 
 def infer_sensor_type_code(topic: str | None, payload: Any) -> str:
     topic_text = str(topic or "").strip().lower()
-    parsed_payload = params_json_to_dict(payload)
+    parsed_payload = json_object_to_dict(payload)
 
     if topic_text.endswith("/climate"):
         return "climate"
@@ -2923,7 +3078,7 @@ def save_telemetry_normalized(
     tray_id: Any = None,
     recorded_at: datetime | None = None,
 ) -> dict[str, Any] | None:
-    parsed_payload = params_json_to_dict(payload)
+    parsed_payload = json_object_to_dict(payload)
     normalized_tray_id = normalize_device_id(tray_id)
     if normalized_tray_id is None:
         topic_tray_id, _ = parse_topic(topic)
@@ -2985,10 +3140,6 @@ def save_telemetry_normalized(
         )
 
     return reading
-
-
-def backfill_telemetry_normalized(cursor, limit: int | None = None) -> int:
-    return 0
 
 
 def ensure_telemetry_hourly_values_schema(cursor) -> None:
@@ -3135,10 +3286,6 @@ def save_hourly_values_from_row(cursor, row: dict[str, Any]) -> None:
         )
 
 
-def backfill_telemetry_hourly_values(cursor) -> int:
-    return 0
-
-
 def save_telemetry(topic: str, payload: str, recorded_at: datetime | None = None) -> None:
     parsed_value = parse_json_value(payload)
     tray_id, _ = parse_topic(topic)
@@ -3166,16 +3313,20 @@ def save_ai_log(
     with get_connection() as connection:
         with connection.cursor() as cursor:
             ensure_ai_logs_schema(cursor)
+            ensure_ai_log_commands_schema(cursor)
             resolved_cycle_id = cycle_id
             if resolved_cycle_id is None:
                 resolved_cycle_id = get_active_cycle_id_for_tray(cursor, tray_id)
             cursor.execute(
                 """
-                INSERT INTO ai_logs (timestamp, thought, commands_json, cycle_id, source)
-                VALUES (now(), %s, %s, %s, %s)
+                INSERT INTO ai_logs (timestamp, thought, cycle_id, source)
+                VALUES (now(), %s, %s, %s)
+                RETURNING id
                 """,
-                (thought, Jsonb(commands), resolved_cycle_id, source),
+                (thought, resolved_cycle_id, source),
             )
+            row = cursor.fetchone()
+            save_ai_log_commands(cursor, row["id"], commands)
 
 
 def row_to_telemetry_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -3277,7 +3428,7 @@ def get_recent_ai_logs(limit: int = 50) -> list[dict[str, Any]]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT id, timestamp, thought, commands_json, cycle_id, source
+                SELECT id, timestamp, thought, cycle_id, source
                 FROM ai_logs
                 ORDER BY id DESC
                 LIMIT %s
@@ -3285,13 +3436,36 @@ def get_recent_ai_logs(limit: int = 50) -> list[dict[str, Any]]:
                 (limit,),
             )
             rows = cursor.fetchall()
+            log_ids = [row["id"] for row in rows]
+            commands_by_log_id: dict[int, list[dict[str, Any]]] = {log_id: [] for log_id in log_ids}
+            if log_ids:
+                cursor.execute(
+                    """
+                    SELECT ai_log_id, device_id, command, value, payload
+                    FROM ai_log_commands
+                    WHERE ai_log_id = ANY(%s)
+                    ORDER BY id ASC
+                    """,
+                    (log_ids,),
+                )
+                for command_row in cursor.fetchall():
+                    payload = command_row["payload"] if isinstance(command_row["payload"], dict) else {}
+                    item = dict(payload)
+                    if command_row["device_id"] is not None:
+                        item.setdefault("device_id", command_row["device_id"])
+                    if command_row["command"] is not None:
+                        item.setdefault("command", command_row["command"])
+                    if command_row["value"] is not None:
+                        item.setdefault("value", command_row["value"])
+                    commands_by_log_id.setdefault(command_row["ai_log_id"], []).append(item)
 
     return [
         {
             "id": row["id"],
             "timestamp": format_timestamp(row["timestamp"]),
             "thought": row["thought"],
-            "commands_json": json_value_to_api_string(row["commands_json"]),
+            "commands_json": json_value_to_api_string(commands_by_log_id.get(row["id"], [])),
+            "commands": commands_by_log_id.get(row["id"], []),
             "cycle_id": row["cycle_id"],
             "source": row["source"],
         }
@@ -3440,10 +3614,6 @@ def get_hourly_history(metric_name: str, hours: int = 24) -> list[dict[str, Any]
     ]
 
 
-def save_telemetry_hourly_compatibility_value(cursor, row: dict[str, Any]) -> None:
-    return None
-
-
 def get_new_hourly_value_rows_from_normalized(cursor) -> list[dict[str, Any]]:
     cursor.execute(
         """
@@ -3503,10 +3673,6 @@ def get_new_hourly_value_rows_from_normalized(cursor) -> list[dict[str, Any]]:
     return cursor.fetchall()
 
 
-def get_new_hourly_value_rows_from_legacy_raw(cursor) -> list[dict[str, Any]]:
-    return []
-
-
 def aggregate_completed_hours() -> int:
     with get_connection() as connection:
         with connection.cursor() as cursor:
@@ -3529,6 +3695,7 @@ def aggregate_completed_hours() -> int:
 
 
 def delete_old_raw_data(retention_hours: int = 24) -> int:
+    # Kept only for backward-compatible scheduler/API calls; strict 3NF runtime does not use raw telemetry.
     return 0
 
 
@@ -3559,31 +3726,26 @@ def save_anomaly_event(
                     SELECT 1
                     FROM anomaly_events
                     WHERE tray_id = %s
-                      AND event_type = %s
-                      AND metric_name = %s
+                      AND event_type_id IS NOT DISTINCT FROM %s
+                      AND metric_id IS NOT DISTINCT FROM %s
                       AND created_at >= now() - (%s * interval '1 minute')
                     LIMIT 1
                 )
                 INSERT INTO anomaly_events (
-                    tray_id, sensor_type, event_type, metric_name,
-                    severity, value, message, payload,
+                    tray_id, value, message, payload,
                     sensor_type_id, event_type_id, metric_id, severity_id, cycle_id,
                     created_at
                 )
-                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now()
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, now()
                 WHERE NOT EXISTS (SELECT 1 FROM recent_duplicate)
                 RETURNING id
                 """,
                 (
                     normalized_tray_id,
-                    event_type,
-                    metric_name,
+                    event_type_id,
+                    metric_id,
                     cooldown_minutes,
                     normalized_tray_id,
-                    sensor_type,
-                    event_type,
-                    metric_name,
-                    severity,
                     value,
                     message,
                     Jsonb(payload or {}),
@@ -3603,11 +3765,31 @@ def get_recent_anomaly_events(hours: int = 24) -> list[dict[str, Any]]:
             cursor.execute(
                 """
                 SELECT
-                    id, tray_id, sensor_type, event_type, metric_name,
-                    severity, value, message, payload, created_at
+                    anomaly_events.id,
+                    anomaly_events.tray_id,
+                    sensor_types.code AS sensor_type,
+                    event_types.code AS event_type,
+                    metrics.code AS metric_name,
+                    severities.code AS severity,
+                    anomaly_events.value,
+                    anomaly_events.message,
+                    anomaly_events.payload,
+                    anomaly_events.created_at
                 FROM anomaly_events
-                WHERE created_at >= now() - (%s * interval '1 hour')
-                ORDER BY created_at DESC, id DESC
+                LEFT JOIN catalog_items AS sensor_types
+                  ON sensor_types.id = anomaly_events.sensor_type_id
+                 AND sensor_types.category = 'sensor_type'
+                LEFT JOIN catalog_items AS event_types
+                  ON event_types.id = anomaly_events.event_type_id
+                 AND event_types.category = 'anomaly_type'
+                LEFT JOIN catalog_items AS metrics
+                  ON metrics.id = anomaly_events.metric_id
+                 AND metrics.category = 'metric'
+                LEFT JOIN catalog_items AS severities
+                  ON severities.id = anomaly_events.severity_id
+                 AND severities.category = 'severity'
+                WHERE anomaly_events.created_at >= now() - (%s * interval '1 hour')
+                ORDER BY anomaly_events.created_at DESC, anomaly_events.id DESC
                 """,
                 (hours,),
             )
@@ -3642,4 +3824,5 @@ def get_recent_hourly_summary(hours: int = 24) -> list[dict[str, Any]]:
 
 
 def clear_telemetry_raw() -> None:
+    # Kept only for backward-compatible seed scripts; strict 3NF runtime does not use raw telemetry.
     return None

@@ -176,14 +176,14 @@ def build_unsupported_crop_context(message: str) -> str:
     if is_root_radish_question(message):
         notes.append(
             "Корнеплодный редис не является базовой культурой маленькой сити-фермы "
-            "в текущей crops_data. Не выдавай его нормы как нормы microgreen_radish. "
+            "в текущей БД АгроТехКарт. Не выдавай его нормы как нормы microgreen_radish. "
             "Объясни пользователю, что вместо корнеплодного редиса в этой установке "
             "поддерживается микрозелень редиса."
         )
     if is_regular_pea_question(message):
         notes.append(
             "Полноценный горох не является базовой культурой маленькой сити-фермы "
-            "в текущей crops_data. Не выдавай его нормы как нормы microgreen_pea. "
+            "в текущей БД АгроТехКарт. Не выдавай его нормы как нормы microgreen_pea. "
             "Объясни пользователю, что в этой установке можно выращивать микрозелень "
             "или побеги гороха."
         )
@@ -232,10 +232,6 @@ def build_crop_rules_context(crops: list[str]) -> str:
         + "\n\n---\n\n".join(sections)
     )
 
-
-def ensure_crop_files() -> None:
-    crops_data_dir = BASE_DIR / "crops_data"
-    crops_data_dir.mkdir(exist_ok=True)
 
 def detect_anomalies(records: list[dict[str, Any]]) -> list[str]:
     anomalies: list[str] = []
@@ -391,34 +387,6 @@ async def save_watchdog_anomaly_events(events: list[dict[str, Any]]) -> None:
         )
         if saved:
             print(f"[WATCHDOG] Anomaly event saved: {event['event_type']} {event['metric_name']}")
-
-
-def parse_crop_ranges(crop_rules: Any) -> dict[str, tuple[float, float]]:
-    if not isinstance(crop_rules, str):
-        return {}
-
-    norms_match = re.search(
-        r"(?ims)^##\s+Нормы\s*$\s*(.*?)(?=^##\s+|\Z)",
-        crop_rules,
-    )
-    if not norms_match:
-        return {}
-
-    norms_block = norms_match.group(1)
-    metric_names = ["air_temp", "humidity", "water_temp", "ph", "ec"]
-    parsed: dict[str, tuple[float, float]] = {}
-
-    for metric_name in metric_names:
-        match = re.search(
-            rf"(?im)^\s*{re.escape(metric_name)}\s*:\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\b",
-            norms_block,
-        )
-        if not match:
-            continue
-        low, high = match.groups()
-        parsed[metric_name] = (float(low), float(high))
-
-    return parsed
 
 
 def norm_ranges_from_db(norms: Any) -> dict[str, tuple[float, float]]:
@@ -840,19 +808,19 @@ def format_active_cycle_for_prompt(tray_id: str = "tray_1") -> str:
         f"лоток: {active_cycle.get('tray_id')}",
     ]
 
-    params_json = active_cycle.get("params_json")
-    if isinstance(params_json, dict) and params_json:
+    norms = active_cycle.get("norms")
+    if isinstance(norms, dict) and norms:
         norm_lines = [
-            f"{key}: {format_ai_norm_value(params_json[key])}"
+            f"{key}: {format_ai_norm_value(norms[key])}"
             for key in AI_CONTEXT_NORM_KEYS
-            if key in params_json and params_json[key] is not None
+            if key in norms and norms[key] is not None
         ]
         if norm_lines:
             lines.append("нормы выращивания: " + "; ".join(norm_lines))
         else:
-            lines.append("нормы выращивания: в params_json нет поддерживаемых норм")
+            lines.append("нормы выращивания: в БД нет поддерживаемых норм")
     else:
-        lines.append("нормы выращивания: params_json пустой или отсутствует")
+        lines.append("нормы выращивания: в БД не найдены")
 
     lines.append("Правило: Используй эти нормы как приоритетные при оценке состояния фермы.")
     return "\n".join(lines)
@@ -954,8 +922,6 @@ async def hourly_aggregation_worker() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    ensure_crop_files()
-
     mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="backend_service")
     mqtt_client.on_connect = on_connect
     mqtt_client.on_message = on_message

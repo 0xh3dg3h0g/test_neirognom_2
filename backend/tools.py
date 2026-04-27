@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any
 
 from db import get_current_metrics as db_get_current_metrics
@@ -6,10 +5,6 @@ from db import get_crop_agrotech_card_from_db
 from db import get_hourly_history
 from db import get_recent_anomaly_events
 
-BASE_DIR = Path(__file__).resolve().parent
-CROPS_DIR = BASE_DIR / "crops_data"
-CLIMATE_TOPIC = "farm/tray_1/sensors/climate"
-WATER_TOPIC = "farm/tray_1/sensors/water"
 CROP_NAME_ALIASES: dict[str, str] = {
     "basil": "basil",
     "базилик": "basil",
@@ -82,22 +77,6 @@ def get_history(metric_name, hours=24) -> dict[str, str] | list[dict[str, Any]]:
     try:
         hours = int(hours)
         return get_hourly_history(metric_name, hours)
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def get_crop_rules(crop_name):
-    """Читает правила выращивания культуры из Markdown файла."""
-    safe_name = normalize_crop_name(crop_name)
-    file_path = CROPS_DIR / f"{safe_name}.md"
-
-    if not file_path.exists():
-        available = [path.name for path in CROPS_DIR.iterdir()] if CROPS_DIR.exists() else "папка пуста"
-        return {"error": f"Правила для культуры '{crop_name}' не найдены. Доступные: {available}"}
-
-    try:
-        with file_path.open("r", encoding="utf-8") as f:
-            return f.read()
     except Exception as e:
         return {"error": str(e)}
 
