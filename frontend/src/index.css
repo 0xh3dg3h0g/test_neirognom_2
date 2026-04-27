@@ -116,3 +116,12 @@ body::after {
     scrollbar-width: none;
   }
 }
+
+@media (min-width: 1280px) and (max-height: 900px) {
+  .farm-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+}

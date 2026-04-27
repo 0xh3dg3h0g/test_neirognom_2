@@ -8,28 +8,50 @@ export default function LedTimeline({
   onPlay,
   compact = false,
 }) {
+  const playButton = (
+    <button
+      type="button"
+      onClick={onPlay}
+      className="group flex w-full shrink-0 items-center justify-center gap-3 whitespace-nowrap rounded-[20px] border border-violet-200/18 bg-gradient-to-r from-violet-500/75 to-fuchsia-500/65 px-4 py-3 text-sm font-medium text-white transition hover:scale-[1.01] hover:brightness-110 md:px-7 lg:w-[270px]"
+      style={{ boxShadow: '0 18px 36px rgba(173, 78, 255, 0.24)' }}
+    >
+      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/14">
+        <PlayIcon className="h-4 w-4" />
+      </span>
+      {isPlaying ? 'Сценарий работает…' : 'Запустить сценарий'}
+    </button>
+  )
+
   return (
-    <GlassCard className="flex h-full min-h-0 flex-col rounded-[28px]">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">Управление LED лентой</div>
+    <GlassCard className="flex h-full min-h-[260px] flex-col rounded-[28px]">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="text-[22px] font-semibold tracking-tight md:text-[24px]">
+            Управление LED лентой
+          </div>
+
           <p className="mt-1.5 text-sm text-white/64">
             Сценарий последовательно включает LED1 → LED10 и имитирует световой день в реальном макете.
           </p>
         </div>
-        {!compact && (
+
+        {compact ? (
+          <div className="shrink-0 lg:pt-1">
+            {playButton}
+          </div>
+        ) : (
           <div className="hidden rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white/55 lg:block">
             06:00 — 22:00
           </div>
         )}
       </div>
 
-      <div className="mt-4 min-h-0">
+      <div className="mt-4 min-h-[116px] shrink-0">
         <div className="relative grid grid-cols-5 gap-3 md:grid-cols-10">
           <div className="absolute left-2 right-2 top-[28px] h-[2px] bg-gradient-to-r from-cyan-300 via-yellow-300 to-fuchsia-400 opacity-80 md:top-[31px]" />
 
           {stages.map((stage, index) => {
-            const active = isPlaying ? index <= activeIndex : true;
+            const active = isPlaying ? index <= activeIndex : true
             const current = index === activeIndex
 
             return (
@@ -50,10 +72,13 @@ export default function LedTimeline({
                 >
                   {stage.moon ? <MoonIcon className="h-6 w-6" /> : <SunIcon className="h-6 w-6" />}
                 </div>
+
                 <div className={`text-xs font-semibold md:text-sm ${current ? 'text-white' : 'text-white/88'}`}>
                   {stage.id}
                 </div>
+
                 {!compact && <div className="hidden text-[11px] text-white/58 md:block">{stage.label}</div>}
+
                 <div className="text-[11px] text-white/48 md:text-xs">{stage.time}</div>
               </div>
             )
@@ -61,19 +86,11 @@ export default function LedTimeline({
         </div>
       </div>
 
-      <div className="mt-5 flex w-full justify-end lg:justify-center 2xl:justify-end">
-        <button
-          type="button"
-          onClick={onPlay}
-          className="group flex w-full items-center justify-center gap-3 whitespace-nowrap rounded-[20px] border border-violet-200/18 bg-gradient-to-r from-violet-500/75 to-fuchsia-500/65 px-4 py-3 text-sm font-medium text-white transition hover:scale-[1.01] hover:brightness-110 md:px-7 lg:w-full 2xl:w-auto"
-          style={{ boxShadow: '0 18px 36px rgba(173, 78, 255, 0.24)' }}
-        >
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/14">
-            <PlayIcon className="h-4 w-4" />
-          </span>
-          {isPlaying ? 'Сценарий работает…' : 'Запустить сценарий'}
-        </button>
-      </div>
+      {!compact && (
+        <div className="mt-5 flex w-full justify-end lg:justify-center 2xl:justify-end">
+          {playButton}
+        </div>
+      )}
     </GlassCard>
   )
 }
