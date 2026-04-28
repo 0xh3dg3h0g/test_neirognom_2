@@ -42,6 +42,7 @@ from db import (
     get_recent_device_events,
     get_recent_ai_logs,
     get_recent_hourly_summary,
+    get_recent_system_feed_events,
     get_recent_telemetry,
     init_db,
     save_ai_log,
@@ -111,6 +112,33 @@ WATCHDOG_METRIC_CONFIG = {
         "low_event_type": "ec_low",
         "high_event_type": "ec_high",
     },
+}
+SYSTEM_FEED_ANOMALY_TEXTS = {
+    "ph_low": "pH ниже нормы",
+    "low_ph": "pH ниже нормы",
+    "ph_high": "pH выше нормы",
+    "high_ph": "pH выше нормы",
+    "ec_low": "EC ниже нормы",
+    "low_ec": "EC ниже нормы",
+    "ec_high": "EC выше нормы",
+    "high_ec": "EC выше нормы",
+    "water_overheat": "Температура воды выше нормы",
+    "water_overcooling": "Температура воды ниже нормы",
+    "air_overheat": "Температура воздуха выше нормы",
+    "air_overcooling": "Температура воздуха ниже нормы",
+    "low_humidity": "Влажность ниже нормы",
+    "high_humidity": "Влажность выше нормы",
+    "stale_climate_data": "Данные климатических датчиков давно не обновлялись",
+    "stale_water_data": "Данные водных датчиков давно не обновлялись",
+    "rapid_air_temp_rise": "Быстрый рост температуры воздуха",
+}
+SYSTEM_FEED_DEVICE_TEXTS = {
+    ("pump", "manual_on"): "Насос включён",
+    ("pump", "manual_off"): "Насос выключен",
+    ("light", "manual_on"): "Освещение включено",
+    ("light", "manual_off"): "Освещение выключено",
+    ("fan", "manual_on"): "Вентиляция включена",
+    ("fan", "manual_off"): "Вентиляция выключена",
 }
 ADVISOR_HISTORY_HOURS = 24
 AI_CONTEXT_NORM_KEYS = (
@@ -754,6 +782,44 @@ async def save_watchdog_anomaly_events(events: list[dict[str, Any]]) -> None:
         )
         if saved:
             print(f"[WATCHDOG] Anomaly event saved: {event['event_type']} {event['metric_name']}")
+
+
+def system_feed_time(created_at: Any) -> str:
+    timestamp = str(created_at or "")
+    if len(timestamp) >= 16:
+        return timestamp[11:16]
+    return timestamp
+
+
+def system_feed_device_key(device_id: Any) -> str | None:
+    device_text = str(device_id or "").lower()
+    for device_key in ("pump", "light", "fan"):
+        if device_key in device_text:
+            return device_key
+    return None
+
+
+def format_system_feed_item(row: dict[str, Any]) -> dict[str, Any]:
+    feed_type = str(row.get("feed_type") or "system")
+    event_type = str(row.get("event_type") or row.get("command") or "")
+    created_at = row.get("created_at") or ""
+
+    if feed_type == "anomaly":
+        text = SYSTEM_FEED_ANOMALY_TEXTS.get(event_type) or str(row.get("message") or "Системный алерт")
+    elif feed_type == "device":
+        device_key = system_feed_device_key(row.get("device_id"))
+        text = SYSTEM_FEED_DEVICE_TEXTS.get((device_key, event_type), "Событие устройства")
+    else:
+        text = "Системное событие"
+
+    return {
+        "id": f"{feed_type}-{row.get('id')}",
+        "type": feed_type,
+        "severity": row.get("severity") or ("warning" if feed_type == "anomaly" else "info"),
+        "text": text,
+        "time": system_feed_time(created_at),
+        "created_at": created_at,
+    }
 
 
 def norm_ranges_from_db(norms: Any) -> dict[str, tuple[float, float]]:
@@ -2164,6 +2230,12 @@ def api_save_cycle_result(cycle_id: int, request: CycleResultRequest) -> dict[st
 @app.get("/api/logs")
 def get_logs(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
     return get_recent_ai_logs(limit)
+
+
+@app.get("/api/system-feed")
+def get_system_feed(limit: int = Query(default=15, ge=1, le=100)) -> list[dict[str, Any]]:
+    events = get_recent_system_feed_events(limit)
+    return [format_system_feed_item(event) for event in events]
 
 
 @app.post("/api/chat")

@@ -3853,6 +3853,69 @@ def get_recent_anomaly_events(hours: int = 24) -> list[dict[str, Any]]:
     ]
 
 
+def get_recent_system_feed_events(limit: int = 15) -> list[dict[str, Any]]:
+    normalized_limit = max(1, min(int(limit), 100))
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT *
+                FROM (
+                    SELECT
+                        'anomaly' AS feed_type,
+                        anomaly_events.id,
+                        NULL::TEXT AS device_id,
+                        event_types.code AS event_type,
+                        NULL::TEXT AS command,
+                        COALESCE(severities.code, 'warning') AS severity,
+                        anomaly_events.message,
+                        anomaly_events.created_at
+                    FROM anomaly_events
+                    LEFT JOIN catalog_items AS event_types
+                      ON event_types.id = anomaly_events.event_type_id
+                     AND event_types.category = 'anomaly_type'
+                    LEFT JOIN catalog_items AS severities
+                      ON severities.id = anomaly_events.severity_id
+                     AND severities.category = 'severity'
+
+                    UNION ALL
+
+                    SELECT
+                        'device' AS feed_type,
+                        device_events.id,
+                        device_events.device_id,
+                        event_types.code AS event_type,
+                        device_events.command,
+                        'info' AS severity,
+                        NULL::TEXT AS message,
+                        device_events.created_at
+                    FROM device_events
+                    LEFT JOIN catalog_items AS event_types
+                      ON event_types.id = device_events.event_type_id
+                     AND event_types.category = 'event_type'
+                ) AS feed
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (normalized_limit,),
+            )
+            rows = cursor.fetchall()
+
+    return [
+        {
+            "id": row["id"],
+            "feed_type": row["feed_type"],
+            "device_id": row["device_id"],
+            "event_type": row["event_type"],
+            "command": row["command"],
+            "severity": row["severity"],
+            "message": row["message"],
+            "created_at": format_timestamp(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
 def get_recent_hourly_summary(hours: int = 24) -> list[dict[str, Any]]:
     normalized_rows = build_hourly_summary_rows_from_values(hours)
     return [

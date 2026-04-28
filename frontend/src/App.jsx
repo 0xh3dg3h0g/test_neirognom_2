@@ -161,20 +161,6 @@ async function requestJson(path, options = {}) {
   return response.json()
 }
 
-function parseLogMeta(entry) {
-  try {
-    if (!entry?.commands_json) return null
-
-    if (typeof entry.commands_json === 'string') {
-      return JSON.parse(entry.commands_json)
-    }
-
-    return entry.commands_json
-  } catch {
-    return null
-  }
-}
-
 function getCropLabel(crop) {
   if (!crop) return 'Культура'
   return crop.name_ru || crop.crop_name_ru || CROP_VISUALS[crop.slug]?.label || crop.slug
@@ -227,14 +213,7 @@ export default function App() {
   const [isCycleLoading, setIsCycleLoading] = useState(false)
   const [cycleError, setCycleError] = useState('')
 
-  const pushThought = (text) => {
-    const item = {
-      id: makeId(),
-      text,
-      time: formatTime(),
-    }
-    setThoughts((prev) => [item, ...prev].slice(0, 5))
-  }
+  const pushThought = () => undefined
 
   const pushAssistantMessage = (text) => {
     setMessages((prev) => [
@@ -292,31 +271,18 @@ export default function App() {
 
     const loadThoughts = async () => {
       try {
-        const data = await requestJson('/api/logs?limit=5')
+        const data = await requestJson('/api/system-feed?limit=15')
         if (!isMounted || !Array.isArray(data)) return
 
-        setThoughts((prev) => {
-          const serverLogs = data
-            .filter((entry) => {
-              const meta = parseLogMeta(entry)
-              return meta?.type !== 'chat'
-            })
-            .map((entry) => ({
-              id: `log-${entry.id ?? makeId()}`,
-              text: entry.thought || 'Нет записанной мысли.',
-              time: formatTimestampLabel(entry.timestamp),
-            }))
-
-          const serverIds = new Set(serverLogs.map((log) => log.id))
-
-          const localLogs = prev.filter(
-            (log) => !serverIds.has(log.id) && !log.id.startsWith('log-')
-          )
-
-          return [...localLogs, ...serverLogs].slice(0, 15)
-        })
+        setThoughts(
+          data.map((entry) => ({
+            id: entry.id ?? makeId(),
+            text: entry.text || 'Системное событие',
+            time: entry.time || formatTimestampLabel(entry.created_at),
+          }))
+        )
       } catch (error) {
-        console.error('Failed to load AI logs', error)
+        console.error('Failed to load system feed', error)
       }
     }
 
