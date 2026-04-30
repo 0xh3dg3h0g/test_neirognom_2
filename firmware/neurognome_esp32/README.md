@@ -18,6 +18,8 @@
 const char* WIFI_SSID = "YOUR_WIFI_SSID";
 const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 const char* MQTT_HOST = "192.168.1.10";
+const char* MQTT_USER = "esp32";
+const char* MQTT_PASS = "CHANGE_ME";
 ```
 
 `MQTT_HOST` должен указывать на машину, где запущен MQTT-брокер, тот же адрес используется backend через `BROKER_HOST`.

@@ -22,9 +22,8 @@ import {
 } from './components/Icons'
 
 const API_BASE_URL =
-  window.location.hostname === 'localhost'
-    ? 'http://localhost:8000'
-    : `${window.location.protocol}//${window.location.hostname}:8000`
+  import.meta.env.VITE_API_BASE_URL?.trim() ??
+  (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '')
 const TELEMETRY_POLL_INTERVAL_MS = 2000
 const LOGS_POLL_INTERVAL_MS = 5000
 const DEVICE_STATUS_POLL_INTERVAL_MS = 2000

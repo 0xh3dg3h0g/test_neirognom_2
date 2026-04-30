@@ -17,6 +17,8 @@ const char* AP_PASS = "12345678";
 
 const char* MQTT_HOST = "192.168.1.10";
 const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = "esp32";
+const char* MQTT_PASS = "CHANGE_ME";
 const char* DEVICE_ID = "tray_1";
 const char* MQTT_CLIENT_ID = "tray_1";
 const char* NTP_SERVER = "pool.ntp.org";
@@ -490,7 +492,22 @@ void maintainMqtt() {
   }
 
   lastMqttAttemptAtMs = millis();
-  if (mqtt.connect(MQTT_CLIENT_ID, AVAILABILITY_TOPIC, 0, true, "offline")) {
+  bool connected = false;
+  if (strlen(MQTT_USER) > 0) {
+    connected = mqtt.connect(
+      MQTT_CLIENT_ID,
+      MQTT_USER,
+      MQTT_PASS,
+      AVAILABILITY_TOPIC,
+      0,
+      true,
+      "offline"
+    );
+  } else {
+    connected = mqtt.connect(MQTT_CLIENT_ID, AVAILABILITY_TOPIC, 0, true, "offline");
+  }
+
+  if (connected) {
     mqtt.publish(AVAILABILITY_TOPIC, "online", true);
     mqtt.subscribe(COMMANDS_TOPIC);
     publishStatus();

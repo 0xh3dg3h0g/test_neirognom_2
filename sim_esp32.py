@@ -12,6 +12,8 @@ load_dotenv(BASE_DIR / ".env")
 
 BROKER_HOST = os.getenv("BROKER_HOST", "127.0.0.1")
 BROKER_PORT = int(os.getenv("BROKER_PORT", "1883"))
+BROKER_USERNAME = os.getenv("BROKER_USERNAME", "").strip()
+BROKER_PASSWORD = os.getenv("BROKER_PASSWORD", "")
 DEVICE_ID = "tray_1"
 COMMANDS_TOPIC = "farm/tray_1/cmd/#"
 CONTROL_TOPIC = "farm/sim/control"
@@ -136,6 +138,8 @@ def on_message(client, userdata, msg):
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=DEVICE_ID)
 client.on_connect = on_connect
 client.on_message = on_message
+if BROKER_USERNAME:
+    client.username_pw_set(BROKER_USERNAME, BROKER_PASSWORD or None)
 
 client.connect(BROKER_HOST, BROKER_PORT, 60)
 client.loop_start()
