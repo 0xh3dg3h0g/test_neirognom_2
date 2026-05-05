@@ -2,6 +2,7 @@
 #include <DHT.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
+#include <Preferences.h>
 #include <PubSubClient.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -10,25 +11,44 @@
 
 // ===================== Network settings =====================
 // Keep the local AP for service access, but use WiFi STA for MQTT/backend.
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
-const char* AP_SSID = "Neurognome_Local";
-const char* AP_PASS = "12345678";
+const char* DEFAULT_WIFI_SSID = "YOUR_WIFI_SSID";
+const char* DEFAULT_WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char* DEFAULT_AP_SSID = "Neurognome_Local";
+const char* DEFAULT_AP_PASS = "12345678";
 
-const char* MQTT_HOST = "192.168.1.10";
-const uint16_t MQTT_PORT = 1883;
-const char* MQTT_USER = "esp32";
-const char* MQTT_PASS = "CHANGE_ME";
-const char* DEVICE_ID = "tray_1";
-const char* MQTT_CLIENT_ID = "tray_1";
-const char* NTP_SERVER = "pool.ntp.org";
+const char* DEFAULT_MQTT_HOST = "192.168.1.10";
+const uint16_t DEFAULT_MQTT_PORT = 1883;
+const char* DEFAULT_MQTT_USER = "esp32";
+const char* DEFAULT_MQTT_PASS = "CHANGE_ME";
+const char* DEFAULT_DEVICE_ID = "tray_1";
+const char* DEFAULT_MQTT_CLIENT_ID = "tray_1";
+const char* DEFAULT_NTP_SERVER = "pool.ntp.org";
 
 // ===================== MQTT topics =====================
-const char* COMMANDS_TOPIC = "farm/tray_1/cmd/#";
-const char* CLIMATE_TOPIC = "farm/tray_1/sensors/climate";
-const char* WATER_TOPIC = "farm/tray_1/sensors/water";
-const char* DEVICE_STATUS_TOPIC = "farm/tray_1/status/devices";
-const char* AVAILABILITY_TOPIC = "farm/tray_1/status/availability";
+const char* DEFAULT_COMMANDS_TOPIC = "farm/tray_1/cmd/#";
+const char* DEFAULT_CLIMATE_TOPIC = "farm/tray_1/sensors/climate";
+const char* DEFAULT_WATER_TOPIC = "farm/tray_1/sensors/water";
+const char* DEFAULT_DEVICE_STATUS_TOPIC = "farm/tray_1/status/devices";
+const char* DEFAULT_AVAILABILITY_TOPIC = "farm/tray_1/status/availability";
+
+struct AppConfig {
+  String wifiSsid;
+  String wifiPass;
+  String apSsid;
+  String apPass;
+  String mqttHost;
+  uint16_t mqttPort;
+  String mqttUser;
+  String mqttPass;
+  String deviceId;
+  String mqttClientId;
+  String ntpServer;
+  String commandsTopic;
+  String climateTopic;
+  String waterTopic;
+  String deviceStatusTopic;
+  String availabilityTopic;
+};
 
 // ===================== Pins =====================
 #define DHTPIN 10
@@ -63,6 +83,8 @@ DallasTemperature waterSensor(&oneWire);
 WebServer server(80);
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
+Preferences preferences;
+AppConfig config;
 
 bool humidifierState = false;
 bool pumpState = false;
@@ -109,8 +131,86 @@ RgbwColor dayPalette[DAY_STAGE_COUNT] = {
   {0, 0, 120, 0}
 };
 
+String readConfigString(const char* key, const char* fallback) {
+  String value = preferences.getString(key, fallback);
+  return value.length() > 0 ? value : String(fallback);
+}
+
+uint16_t readConfigPort(const char* key, uint16_t fallback) {
+  uint16_t value = preferences.getUShort(key, fallback);
+  return value > 0 ? value : fallback;
+}
+
+void loadConfig() {
+  preferences.begin("ngnome", true);
+  config.wifiSsid = readConfigString("wifiSsid", DEFAULT_WIFI_SSID);
+  config.wifiPass = preferences.getString("wifiPass", DEFAULT_WIFI_PASS);
+  config.apSsid = readConfigString("apSsid", DEFAULT_AP_SSID);
+  config.apPass = preferences.getString("apPass", DEFAULT_AP_PASS);
+  config.mqttHost = readConfigString("mqttHost", DEFAULT_MQTT_HOST);
+  config.mqttPort = readConfigPort("mqttPort", DEFAULT_MQTT_PORT);
+  config.mqttUser = preferences.getString("mqttUser", DEFAULT_MQTT_USER);
+  config.mqttPass = preferences.getString("mqttPass", DEFAULT_MQTT_PASS);
+  config.deviceId = readConfigString("deviceId", DEFAULT_DEVICE_ID);
+  config.mqttClientId = readConfigString("clientId", DEFAULT_MQTT_CLIENT_ID);
+  config.ntpServer = readConfigString("ntpServer", DEFAULT_NTP_SERVER);
+  config.commandsTopic = readConfigString("cmdTopic", DEFAULT_COMMANDS_TOPIC);
+  config.climateTopic = readConfigString("climateTopic", DEFAULT_CLIMATE_TOPIC);
+  config.waterTopic = readConfigString("waterTopic", DEFAULT_WATER_TOPIC);
+  config.deviceStatusTopic = readConfigString("statusTopic", DEFAULT_DEVICE_STATUS_TOPIC);
+  config.availabilityTopic = readConfigString("availTopic", DEFAULT_AVAILABILITY_TOPIC);
+  preferences.end();
+}
+
+uint16_t parseMqttPort(const String& rawPort, uint16_t fallback) {
+  long parsed = rawPort.toInt();
+  if (parsed < 1 || parsed > 65535) {
+    return fallback;
+  }
+  return (uint16_t)parsed;
+}
+
+String requiredArgOrDefault(const String& argName, const String& fallback) {
+  String value = server.arg(argName);
+  value.trim();
+  return value.length() > 0 ? value : fallback;
+}
+
+void saveConfigFromRequest() {
+  String nextApSsid = requiredArgOrDefault("ap_ssid", DEFAULT_AP_SSID);
+  String nextApPass = server.arg("ap_pass");
+  if (nextApPass.length() > 0 && nextApPass.length() < 8) {
+    nextApPass = DEFAULT_AP_PASS;
+  }
+
+  preferences.begin("ngnome", false);
+  preferences.putString("wifiSsid", server.arg("wifi_ssid"));
+  preferences.putString("wifiPass", server.arg("wifi_pass"));
+  preferences.putString("apSsid", nextApSsid);
+  preferences.putString("apPass", nextApPass);
+  preferences.putString("mqttHost", requiredArgOrDefault("mqtt_host", DEFAULT_MQTT_HOST));
+  preferences.putUShort("mqttPort", parseMqttPort(server.arg("mqtt_port"), DEFAULT_MQTT_PORT));
+  preferences.putString("mqttUser", server.arg("mqtt_user"));
+  preferences.putString("mqttPass", server.arg("mqtt_pass"));
+  preferences.putString("deviceId", requiredArgOrDefault("device_id", DEFAULT_DEVICE_ID));
+  preferences.putString("clientId", requiredArgOrDefault("mqtt_client_id", DEFAULT_MQTT_CLIENT_ID));
+  preferences.putString("ntpServer", requiredArgOrDefault("ntp_server", DEFAULT_NTP_SERVER));
+  preferences.putString("cmdTopic", requiredArgOrDefault("commands_topic", DEFAULT_COMMANDS_TOPIC));
+  preferences.putString("climateTopic", requiredArgOrDefault("climate_topic", DEFAULT_CLIMATE_TOPIC));
+  preferences.putString("waterTopic", requiredArgOrDefault("water_topic", DEFAULT_WATER_TOPIC));
+  preferences.putString("statusTopic", requiredArgOrDefault("device_status_topic", DEFAULT_DEVICE_STATUS_TOPIC));
+  preferences.putString("availTopic", requiredArgOrDefault("availability_topic", DEFAULT_AVAILABILITY_TOPIC));
+  preferences.end();
+}
+
+void resetConfigToDefaults() {
+  preferences.begin("ngnome", false);
+  preferences.clear();
+  preferences.end();
+}
+
 bool hasWifiCredentials() {
-  return strlen(WIFI_SSID) > 0 && strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0;
+  return config.wifiSsid.length() > 0 && config.wifiSsid != DEFAULT_WIFI_SSID;
 }
 
 bool timeIsReady() {
@@ -348,7 +448,7 @@ void publishTelemetry() {
 
   char climatePayload[128];
   serializeJson(climateDoc, climatePayload);
-  mqtt.publish(CLIMATE_TOPIC, climatePayload, true);
+  mqtt.publish(config.climateTopic.c_str(), climatePayload, true);
 
   StaticJsonDocument<128> waterDoc;
   if (!isnan(waterTemp) && waterTemp > -100.0f) {
@@ -357,13 +457,14 @@ void publishTelemetry() {
 
   char waterPayload[128];
   serializeJson(waterDoc, waterPayload);
-  mqtt.publish(WATER_TOPIC, waterPayload, true);
+  mqtt.publish(config.waterTopic.c_str(), waterPayload, true);
 }
 
 void publishStatus() {
   if (!mqtt.connected()) return;
 
-  StaticJsonDocument<384> doc;
+  StaticJsonDocument<512> doc;
+  doc["device_id"] = config.deviceId;
   doc["pump"] = pumpState;
   doc["fan"] = fanState;
   doc["humidifier"] = humidifierState;
@@ -375,9 +476,9 @@ void publishStatus() {
   doc["day_duration_ms"] = dayScenarioTotalMs;
   doc["uptime_ms"] = millis();
 
-  char payload[384];
+  char payload[512];
   serializeJson(doc, payload);
-  mqtt.publish(DEVICE_STATUS_TOPIC, payload, true);
+  mqtt.publish(config.deviceStatusTopic.c_str(), payload, true);
 }
 
 void handleTextCommand(const String& device, String command) {
@@ -474,7 +575,7 @@ void maintainWifi() {
   }
 
   lastWifiAttemptAtMs = millis();
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.begin(config.wifiSsid.c_str(), config.wifiPass.c_str());
 }
 
 void maintainMqtt() {
@@ -493,26 +594,100 @@ void maintainMqtt() {
 
   lastMqttAttemptAtMs = millis();
   bool connected = false;
-  if (strlen(MQTT_USER) > 0) {
+  if (config.mqttUser.length() > 0) {
     connected = mqtt.connect(
-      MQTT_CLIENT_ID,
-      MQTT_USER,
-      MQTT_PASS,
-      AVAILABILITY_TOPIC,
+      config.mqttClientId.c_str(),
+      config.mqttUser.c_str(),
+      config.mqttPass.c_str(),
+      config.availabilityTopic.c_str(),
       0,
       true,
       "offline"
     );
   } else {
-    connected = mqtt.connect(MQTT_CLIENT_ID, AVAILABILITY_TOPIC, 0, true, "offline");
+    connected = mqtt.connect(config.mqttClientId.c_str(), config.availabilityTopic.c_str(), 0, true, "offline");
   }
 
   if (connected) {
-    mqtt.publish(AVAILABILITY_TOPIC, "online", true);
-    mqtt.subscribe(COMMANDS_TOPIC);
+    mqtt.publish(config.availabilityTopic.c_str(), "online", true);
+    mqtt.subscribe(config.commandsTopic.c_str());
     publishStatus();
     publishTelemetry();
   }
+}
+
+String htmlEscape(String value) {
+  value.replace("&", "&amp;");
+  value.replace("<", "&lt;");
+  value.replace(">", "&gt;");
+  value.replace("\"", "&quot;");
+  value.replace("'", "&#39;");
+  return value;
+}
+
+String configInput(const String& label, const String& name, const String& value, const String& type = "text") {
+  String escapedLabel = htmlEscape(label);
+  String escapedName = htmlEscape(name);
+  String escapedValue = htmlEscape(value);
+  return "<label>" + escapedLabel + "<input type='" + type + "' name='" + escapedName + "' value='" + escapedValue + "'></label>";
+}
+
+String configPageStyle() {
+  return "<style>"
+    "body{font-family:sans-serif;padding:18px;background:#f0f2f5;color:#17202a}"
+    ".wrap{max-width:760px;margin:0 auto}.card{background:white;padding:18px;border-radius:14px;box-shadow:0 4px 8px rgba(0,0,0,.08);margin-bottom:16px}"
+    "label{display:block;font-size:13px;font-weight:700;margin:12px 0 6px}"
+    "input{box-sizing:border-box;width:100%;padding:11px;border:1px solid #ccd3dc;border-radius:8px;font-size:15px}"
+    "button,.btn{display:inline-block;border:0;border-radius:8px;padding:12px 14px;margin:8px 8px 0 0;color:white;background:#2563eb;text-decoration:none;font-size:15px;cursor:pointer}"
+    ".danger{background:#dc3545}.muted{color:#5d6978;font-size:13px;line-height:1.45}.grid{display:grid;grid-template-columns:1fr;gap:8px}@media(min-width:720px){.grid{grid-template-columns:1fr 1fr}}"
+    "</style>";
+}
+
+void handleConfig() {
+  String html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>ESP32 settings</title>";
+  html += configPageStyle();
+  html += "</head><body><div class='wrap'>";
+  html += "<h2>Neurognome ESP32 settings</h2>";
+  html += "<div class='card'><form method='POST' action='/config/save'>";
+  html += "<h3>WiFi</h3><div class='grid'>";
+  html += configInput("WiFi SSID", "wifi_ssid", config.wifiSsid);
+  html += configInput("WiFi password", "wifi_pass", config.wifiPass);
+  html += configInput("AP SSID", "ap_ssid", config.apSsid);
+  html += configInput("AP password", "ap_pass", config.apPass);
+  html += "</div><p class='muted'>AP password must be empty or at least 8 characters. After saving, reconnect to the new AP if you changed it.</p>";
+  html += "<h3>MQTT</h3><div class='grid'>";
+  html += configInput("MQTT host", "mqtt_host", config.mqttHost);
+  html += configInput("MQTT port", "mqtt_port", String(config.mqttPort), "number");
+  html += configInput("MQTT user", "mqtt_user", config.mqttUser);
+  html += configInput("MQTT password", "mqtt_pass", config.mqttPass);
+  html += configInput("Device ID", "device_id", config.deviceId);
+  html += configInput("MQTT client ID", "mqtt_client_id", config.mqttClientId);
+  html += configInput("NTP server", "ntp_server", config.ntpServer);
+  html += "</div><h3>Topics</h3>";
+  html += configInput("Commands topic", "commands_topic", config.commandsTopic);
+  html += configInput("Climate topic", "climate_topic", config.climateTopic);
+  html += configInput("Water topic", "water_topic", config.waterTopic);
+  html += configInput("Device status topic", "device_status_topic", config.deviceStatusTopic);
+  html += configInput("Availability topic", "availability_topic", config.availabilityTopic);
+  html += "<button type='submit'>Save and reboot</button><a class='btn' href='/'>Back</a>";
+  html += "</form></div>";
+  html += "<div class='card'><form method='POST' action='/config/reset'><p class='muted'>Reset clears saved settings and returns firmware defaults.</p><button class='danger' type='submit'>Reset settings</button></form></div>";
+  html += "</div></body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleSaveConfig() {
+  saveConfigFromRequest();
+  server.send(200, "text/html", "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h2>Saved. Rebooting...</h2></body></html>");
+  delay(700);
+  ESP.restart();
+}
+
+void handleResetConfig() {
+  resetConfigToDefaults();
+  server.send(200, "text/html", "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h2>Settings reset. Rebooting...</h2></body></html>");
+  delay(700);
+  ESP.restart();
 }
 
 void handleRoot() {
@@ -528,7 +703,8 @@ void handleRoot() {
   html += "<p>Water: " + (isnan(waterTemp) ? "error" : String(waterTemp, 1)) + " C</p>";
   String wifiStatus = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("not connected");
   html += "<p>WiFi: " + wifiStatus + "</p>";
-  html += "<p>MQTT: " + String(mqtt.connected() ? "connected" : "offline") + "</p></div>";
+  html += "<p>MQTT: " + String(mqtt.connected() ? "connected" : "offline") + "</p>";
+  html += "<p>Device: " + htmlEscape(config.deviceId) + "</p></div>";
 
   auto drawBtn = [&](String label, String dev, bool state) {
     String cls = state ? "on" : "off";
@@ -541,6 +717,7 @@ void handleRoot() {
   html += drawBtn("Fan", "fan", fanState);
   html += drawBtn("Light", "light", lightState);
   html += "<br><a href='/day'><button style='background:#6f42c1'>Day scenario (15 sec)</button></a>";
+  html += "<br><a href='/config'><button style='background:#2563eb'>Settings</button></a>";
   html += "</div></body></html>";
   server.send(200, "text/html", html);
 }
@@ -585,14 +762,18 @@ void setupPins() {
 
 void setupNetwork() {
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID, AP_PASS);
-
-  if (hasWifiCredentials()) {
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    configTime(0, 0, NTP_SERVER);
+  if (config.apPass.length() >= 8) {
+    WiFi.softAP(config.apSsid.c_str(), config.apPass.c_str());
+  } else {
+    WiFi.softAP(config.apSsid.c_str());
   }
 
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  if (hasWifiCredentials()) {
+    WiFi.begin(config.wifiSsid.c_str(), config.wifiPass.c_str());
+    configTime(0, 0, config.ntpServer.c_str());
+  }
+
+  mqtt.setServer(config.mqttHost.c_str(), config.mqttPort);
   mqtt.setCallback(mqttCallback);
   mqtt.setBufferSize(512);
 }
@@ -601,6 +782,9 @@ void setupWebServer() {
   server.on("/", handleRoot);
   server.on("/toggle", handleToggle);
   server.on("/day", handleDay);
+  server.on("/config", HTTP_GET, handleConfig);
+  server.on("/config/save", HTTP_POST, handleSaveConfig);
+  server.on("/config/reset", HTTP_POST, handleResetConfig);
   server.begin();
 }
 
@@ -608,6 +792,7 @@ void setup() {
   Serial.begin(115200);
   dht.begin();
   waterSensor.begin();
+  loadConfig();
   setupPins();
   setupNetwork();
   setupWebServer();

@@ -9,10 +9,11 @@
 - `DHT sensor library`
 - `OneWire`
 - `DallasTemperature`
+- `Preferences` входит в Arduino core для ESP32
 
 ## Настройка перед загрузкой
 
-В `neurognome_esp32.ino` замените:
+В `neurognome_esp32.ino` можно оставить дефолты или заменить их перед первой загрузкой:
 
 ```cpp
 const char* WIFI_SSID = "YOUR_WIFI_SSID";
@@ -23,6 +24,16 @@ const char* MQTT_PASS = "CHANGE_ME";
 ```
 
 `MQTT_HOST` должен указывать на машину, где запущен MQTT-брокер, тот же адрес используется backend через `BROKER_HOST`.
+
+После загрузки прошивки настройки можно менять без перекомпиляции:
+
+1. Подключитесь к WiFi-точке ESP32, по умолчанию `Neurognome_Local` / `12345678`.
+2. Откройте веб-интерфейс ESP32 в браузере. Обычно это `http://192.168.4.1`.
+3. Нажмите `Settings`.
+4. Измените WiFi, AP, MQTT, `DEVICE_ID`, `MQTT_CLIENT_ID`, NTP и MQTT topics.
+5. Нажмите `Save and reboot`.
+
+Прошивка сохраняет настройки во flash через NVS/Preferences. Кнопка `Reset settings` очищает сохранённые значения и возвращает дефолты из кода.
 
 ## MQTT-контракт
 
