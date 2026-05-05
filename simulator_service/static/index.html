@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neurognome MQTT Simulator</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #14161a;
+        color: rgba(248, 250, 252, 0.95);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+          linear-gradient(180deg, #1a1d21 0%, #14161a 100%);
+        background-size: 120px 120px, 120px 120px, auto;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .app {
+        width: min(1760px, 100%);
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .topbar,
+      .panel,
+      .machine,
+      .log-shell {
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 8px;
+        background: linear-gradient(180deg, rgba(34, 37, 43, 0.82), rgba(22, 24, 29, 0.7));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.08),
+          0 16px 34px rgba(0, 0, 0, 0.24);
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: minmax(260px, 1fr) auto;
+        gap: 16px;
+        align-items: center;
+        padding: 18px 20px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 26px;
+        line-height: 1;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        margin-top: 8px;
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 14px;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+        padding: 7px 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.045);
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.3);
+      }
+
+      .dot.connected {
+        background: #53e78a;
+        box-shadow: 0 0 18px rgba(83, 231, 138, 0.85);
+      }
+
+      .dot.offline {
+        background: #ff9461;
+        box-shadow: 0 0 18px rgba(255, 148, 97, 0.55);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(360px, 0.86fr) minmax(0, 1.14fr);
+        gap: 16px;
+        margin-top: 16px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+        align-content: start;
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+
+      .panel-title {
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .panel-note {
+        margin-top: 5px;
+        color: rgba(255, 255, 255, 0.48);
+        font-size: 13px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+      }
+
+      .field label {
+        color: rgba(255, 255, 255, 0.56);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .input,
+      .select {
+        width: 100%;
+        min-height: 42px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        outline: none;
+        background: rgba(0, 0, 0, 0.2);
+        color: #fff;
+        padding: 10px 12px;
+      }
+
+      .input:focus {
+        border-color: rgba(118, 231, 255, 0.55);
+        box-shadow: 0 0 0 3px rgba(118, 231, 255, 0.1);
+      }
+
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .button {
+        display: inline-flex;
+        min-height: 42px;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.07);
+        color: rgba(255, 255, 255, 0.88);
+        padding: 10px 14px;
+        font-size: 14px;
+        font-weight: 700;
+        transition:
+          transform 0.16s ease,
+          background 0.16s ease,
+          border-color 0.16s ease;
+      }
+
+      .button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.105);
+      }
+
+      .button.primary {
+        border-color: rgba(118, 231, 255, 0.26);
+        background: rgba(118, 231, 255, 0.13);
+        color: #e8fbff;
+      }
+
+      .button.good {
+        border-color: rgba(83, 231, 138, 0.25);
+        background: rgba(83, 231, 138, 0.12);
+        color: #eafff1;
+      }
+
+      .button.warn {
+        border-color: rgba(255, 148, 97, 0.25);
+        background: rgba(255, 148, 97, 0.12);
+        color: #fff1e9;
+      }
+
+      .button:disabled {
+        cursor: wait;
+        opacity: 0.62;
+        transform: none;
+      }
+
+      .toggle {
+        position: relative;
+        width: 62px;
+        height: 34px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        padding: 3px;
+      }
+
+      .toggle::before {
+        content: "";
+        display: block;
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.85);
+        transition: transform 0.18s ease;
+      }
+
+      .toggle.active {
+        border-color: rgba(83, 231, 138, 0.28);
+        background: rgba(83, 231, 138, 0.13);
+      }
+
+      .toggle.active::before {
+        transform: translateX(28px);
+        background: #fff;
+        box-shadow: 0 0 20px rgba(83, 231, 138, 0.28);
+      }
+
+      .sensor {
+        display: grid;
+        gap: 11px;
+        padding: 13px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      .sensor-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .sensor-title {
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .sensor-value {
+        display: flex;
+        align-items: baseline;
+        gap: 5px;
+      }
+
+      .sensor-value input {
+        width: 86px;
+        min-height: 36px;
+        text-align: right;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      .preset {
+        flex: 1 1 96px;
+      }
+
+      .machine-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .machine {
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      .machine.active {
+        border-color: color-mix(in srgb, var(--accent), transparent 55%);
+        box-shadow: 0 0 28px color-mix(in srgb, var(--accent), transparent 78%);
+      }
+
+      .machine-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .machine-name {
+        font-size: 16px;
+        font-weight: 750;
+      }
+
+      .machine-topic {
+        margin-top: 6px;
+        overflow: hidden;
+        color: rgba(255, 255, 255, 0.4);
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .led-strip {
+        display: grid;
+        grid-template-columns: repeat(10, 1fr);
+        gap: 7px;
+        margin-top: 16px;
+      }
+
+      .led {
+        height: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .led.active {
+        background: var(--led-color);
+        box-shadow: 0 0 18px var(--led-color);
+      }
+
+      .log-shell {
+        display: grid;
+        min-height: 560px;
+        grid-template-rows: auto minmax(0, 1fr);
+        overflow: hidden;
+      }
+
+      .log-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 16px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      }
+
+      .log-list {
+        overflow: auto;
+        background: rgba(0, 0, 0, 0.2);
+      }
+
+      .log-row {
+        display: grid;
+        gap: 6px;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+      }
+
+      .log-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .time,
+      .topic,
+      .payload {
+        font-family: Consolas, "SFMono-Regular", monospace;
+      }
+
+      .time {
+        color: rgba(255, 255, 255, 0.38);
+        font-size: 11px;
+      }
+
+      .badge {
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        padding: 2px 7px;
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .badge.rx {
+        border-color: rgba(83, 231, 138, 0.28);
+        background: rgba(83, 231, 138, 0.1);
+        color: #baf7cf;
+      }
+
+      .badge.tx {
+        border-color: rgba(118, 231, 255, 0.28);
+        background: rgba(118, 231, 255, 0.1);
+        color: #c9f7ff;
+      }
+
+      .badge.system {
+        border-color: rgba(198, 104, 255, 0.28);
+        background: rgba(198, 104, 255, 0.1);
+        color: #edceff;
+      }
+
+      .badge.error {
+        border-color: rgba(255, 116, 116, 0.34);
+        background: rgba(255, 116, 116, 0.12);
+        color: #ffd0d0;
+      }
+
+      .topic {
+        min-width: 180px;
+        flex: 1;
+        overflow: hidden;
+        color: rgba(255, 255, 255, 0.74);
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .payload {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.58);
+        font-size: 11px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .empty {
+        display: grid;
+        min-height: 260px;
+        place-items: center;
+        color: rgba(255, 255, 255, 0.38);
+        font-size: 14px;
+      }
+
+      .small {
+        color: rgba(255, 255, 255, 0.48);
+        font-size: 12px;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      @media (max-width: 1180px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .log-shell {
+          min-height: 520px;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .app {
+          padding: 12px;
+        }
+
+        .topbar,
+        .layout,
+        .stack,
+        .grid-2,
+        .grid-3,
+        .machine-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar {
+          align-items: start;
+        }
+
+        .title {
+          font-size: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div>
+          <h1 class="title">Neurognome MQTT Simulator</h1>
+          <div class="subtitle" id="targetLine">farm/tray_1</div>
+        </div>
+        <div class="row">
+          <span class="status-pill">
+            <span class="dot offline" id="statusDot"></span>
+            <span id="connectionText">Отключено</span>
+          </span>
+          <span class="status-pill" id="wsText">WS</span>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="stack">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">MQTT брокер</div>
+                <div class="panel-note">Параметры меняются без перезапуска сервиса</div>
+              </div>
+            </div>
+
+            <form id="brokerForm" class="grid-2">
+              <div class="field">
+                <label for="host">Host</label>
+                <input class="input" id="host" name="host" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="port">Port</label>
+                <input class="input" id="port" name="port" type="number" min="1" max="65535" />
+              </div>
+              <div class="field">
+                <label for="username">Username</label>
+                <input class="input" id="username" name="username" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="password">Password</label>
+                <input class="input" id="password" name="password" type="password" autocomplete="new-password" />
+              </div>
+              <div class="field">
+                <label for="clientId">Client ID</label>
+                <input class="input" id="clientId" name="clientId" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="targetId">Target ID</label>
+                <input class="input" id="targetId" name="targetId" autocomplete="off" />
+              </div>
+            </form>
+
+            <div class="row" style="margin-top: 14px">
+              <button class="button primary" id="connectButton" type="button">Подключиться</button>
+              <button class="button" id="disconnectButton" type="button">Отключиться</button>
+              <button class="toggle" id="tlsToggle" type="button" aria-label="TLS"></button>
+              <span class="small">TLS</span>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Датчики</div>
+                <div class="panel-note">Публикация в sensors/climate и sensors/water</div>
+              </div>
+              <span class="small" id="lastPublishText">Готово</span>
+            </div>
+
+            <div class="row" style="margin-bottom: 14px">
+              <button class="button preset good" data-preset="normal" type="button">Норма</button>
+              <button class="button preset warn" data-preset="heat" type="button">Жара</button>
+              <button class="button preset primary" data-preset="cold" type="button">Холод</button>
+            </div>
+
+            <div id="sensors" class="stack"></div>
+
+            <div class="row" style="margin-top: 14px">
+              <button class="button primary" id="publishSensorsButton" type="button">Отправить датчики</button>
+              <button class="toggle" id="autoToggle" type="button" aria-label="Автопоток"></button>
+              <span class="small">Автопоток</span>
+              <input class="input" id="intervalMs" type="number" min="500" max="60000" step="500" value="2000" style="width: 112px" />
+              <span class="small">мс</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="stack">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Аппаратура</div>
+                <div class="panel-note">Состояние меняется от входящих cmd-топиков</div>
+              </div>
+              <button class="button warn" id="dayButton" type="button">Световой день</button>
+            </div>
+
+            <div class="machine-grid" id="machines"></div>
+            <div class="led-strip" id="ledStrip"></div>
+          </div>
+
+          <div class="log-shell">
+            <div class="log-head">
+              <div>
+                <div class="panel-title">MQTT консоль</div>
+                <div class="panel-note">rx / tx / system</div>
+              </div>
+              <button class="button" id="clearLogsButton" type="button">Очистить</button>
+            </div>
+            <div class="log-list" id="logList">
+              <div class="empty">Ожидание MQTT событий</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const sensorFields = [
+        { key: 'air_temp', label: 'Воздух', unit: '°C', min: 5, max: 45, step: 0.1, accent: '#ff9461' },
+        { key: 'humidity', label: 'Влажность', unit: '%', min: 10, max: 95, step: 1, accent: '#75f08d' },
+        { key: 'water_temp', label: 'Вода', unit: '°C', min: 5, max: 35, step: 0.1, accent: '#76e7ff' },
+        { key: 'ph', label: 'pH', unit: '', min: 4, max: 8, step: 0.1, accent: '#ffd667' },
+        { key: 'ec', label: 'EC', unit: '', min: 0.2, max: 3.5, step: 0.1, accent: '#c668ff' },
+      ]
+
+      const sensorValues = {
+        air_temp: 23.4,
+        humidity: 56,
+        water_temp: 20.1,
+        ph: 6.1,
+        ec: 1.6,
+      }
+
+      const presets = {
+        normal: { mode: 'NORMAL', values: { air_temp: 23.4, humidity: 56, water_temp: 20.1, ph: 6.1, ec: 1.6 } },
+        heat: { mode: 'HEAT', values: { air_temp: 35.5, humidity: 30, water_temp: 20.6, ph: 6.2, ec: 1.7 } },
+        cold: { mode: 'COLD', values: { air_temp: 12, humidity: 50, water_temp: 19.4, ph: 6, ec: 1.5 } },
+      }
+
+      const machines = [
+        { key: 'fan', label: 'Вентилятор', accent: '#75f08d' },
+        { key: 'light', label: 'Свет', accent: '#ffd667' },
+        { key: 'pump', label: 'Насос', accent: '#8ec8ff' },
+        { key: 'humidifier', label: 'Увлажнитель', accent: '#71f16a' },
+      ]
+
+      const ledColors = ['#76e7ff', '#89f0ff', '#9cf6dd', '#c8f38e', '#ffe66f', '#ffc44b', '#ffb24b', '#ff9461', '#f789d6', '#c5bcff']
+      let brokerState = null
+      let logs = []
+      let ws = null
+      let wsRetry = null
+      let autoTimer = null
+      let tlsEnabled = false
+
+      const $ = (selector) => document.querySelector(selector)
+      const $$ = (selector) => [...document.querySelectorAll(selector)]
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+          ...options,
+        })
+        if (!response.ok) {
+          const text = await response.text()
+          throw new Error(text || `HTTP ${response.status}`)
+        }
+        return response.json()
+      }
+
+      function loadLocalConfig() {
+        try {
+          return JSON.parse(localStorage.getItem('neurognome_simulator_config') || '{}')
+        } catch {
+          return {}
+        }
+      }
+
+      function saveLocalConfig(config) {
+        localStorage.setItem('neurognome_simulator_config', JSON.stringify(config))
+      }
+
+      function brokerConfigFromForm() {
+        return {
+          host: $('#host').value.trim() || '127.0.0.1',
+          port: Number($('#port').value) || 1883,
+          username: $('#username').value.trim(),
+          password: $('#password').value,
+          client_id: $('#clientId').value.trim() || 'neurognome_web_simulator',
+          target_id: $('#targetId').value.trim() || 'tray_1',
+          use_tls: tlsEnabled,
+        }
+      }
+
+      function applyConfigToForm(config) {
+        $('#host').value = config.host || '127.0.0.1'
+        $('#port').value = config.port || 1883
+        $('#username').value = config.username || ''
+        $('#password').value = config.password || ''
+        $('#clientId').value = config.client_id || 'neurognome_web_simulator'
+        $('#targetId').value = config.target_id || 'tray_1'
+        tlsEnabled = Boolean(config.use_tls)
+        $('#tlsToggle').classList.toggle('active', tlsEnabled)
+      }
+
+      function renderSensors() {
+        $('#sensors').innerHTML = sensorFields.map((field) => `
+          <div class="sensor" style="--accent: ${field.accent}">
+            <div class="sensor-top">
+              <div>
+                <div class="sensor-title">${field.label}</div>
+                <div class="small">${field.min}–${field.max} ${field.unit}</div>
+              </div>
+              <div class="sensor-value">
+                <input class="input sensor-number" data-key="${field.key}" type="number" min="${field.min}" max="${field.max}" step="${field.step}" value="${sensorValues[field.key]}">
+                <span class="small">${field.unit}</span>
+              </div>
+            </div>
+            <input class="sensor-range" data-key="${field.key}" type="range" min="${field.min}" max="${field.max}" step="${field.step}" value="${sensorValues[field.key]}">
+          </div>
+        `).join('')
+
+        $$('.sensor-number, .sensor-range').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const key = event.target.dataset.key
+            sensorValues[key] = Number(event.target.value)
+            syncSensorInputs(key)
+          })
+        })
+      }
+
+      function syncSensorInputs(key) {
+        $$(`[data-key="${key}"]`).forEach((input) => {
+          input.value = sensorValues[key]
+        })
+      }
+
+      function renderMachines(devices = {}) {
+        const targetId = $('#targetId').value.trim() || 'tray_1'
+        $('#machines').innerHTML = machines.map((machine) => {
+          const enabled = Boolean(devices[machine.key])
+          return `
+            <div class="machine ${enabled ? 'active' : ''}" style="--accent: ${machine.accent}">
+              <div class="machine-top">
+                <div>
+                  <div class="machine-name">${machine.label}</div>
+                  <div class="machine-topic">farm/${targetId}/cmd/${machine.key}</div>
+                </div>
+                <button class="toggle ${enabled ? 'active' : ''}" data-device="${machine.key}" type="button" aria-label="${machine.label}"></button>
+              </div>
+              <div class="small" style="margin-top: 12px">${enabled ? 'Включено' : 'Выключено'}</div>
+            </div>
+          `
+        }).join('')
+
+        $$('[data-device]').forEach((button) => {
+          button.addEventListener('click', () => toggleDevice(button.dataset.device))
+        })
+      }
+
+      function renderLed(devices = {}) {
+        const stage = Number(devices.day_stage ?? 9)
+        const running = Boolean(devices.day_scenario_running)
+        $('#ledStrip').innerHTML = ledColors.map((color, index) => {
+          const active = running ? index <= stage : false
+          return `<div class="led ${active ? 'active' : ''}" style="--led-color: ${color}"></div>`
+        }).join('')
+      }
+
+      function renderConnection(state) {
+        brokerState = state
+        const connected = Boolean(state?.connected)
+        $('#statusDot').classList.toggle('connected', connected)
+        $('#statusDot').classList.toggle('offline', !connected)
+        $('#connectionText').textContent = connected ? 'Подключено' : (state?.connection_message || 'Отключено')
+        const targetId = state?.config?.target_id || $('#targetId').value || 'tray_1'
+        $('#targetLine').textContent = `farm/${targetId}`
+        renderMachines(state?.devices || {})
+        renderLed(state?.devices || {})
+      }
+
+      function renderLogs() {
+        const list = $('#logList')
+        if (!logs.length) {
+          list.innerHTML = '<div class="empty">Ожидание MQTT событий</div>'
+          return
+        }
+        list.innerHTML = logs.slice(-220).map((log) => {
+          const payload = formatPayload(log.payload)
+          return `
+            <div class="log-row">
+              <div class="log-meta">
+                <span class="time">${formatTime(log.timestamp_ms)}</span>
+                <span class="badge ${log.direction || 'rx'}">${log.direction || 'rx'}</span>
+                <span class="topic">${escapeHtml(log.topic || '')}</span>
+              </div>
+              <pre class="payload">${escapeHtml(payload)}</pre>
+            </div>
+          `
+        }).join('')
+        list.scrollTop = list.scrollHeight
+      }
+
+      function formatPayload(payload) {
+        try {
+          return JSON.stringify(JSON.parse(payload), null, 2)
+        } catch {
+          return String(payload ?? '')
+        }
+      }
+
+      function formatTime(timestampMs) {
+        return new Intl.DateTimeFormat('ru-RU', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }).format(new Date(Number(timestampMs) || Date.now()))
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;')
+      }
+
+      async function refreshStatus() {
+        try {
+          const state = await api('/api/status')
+          renderConnection(state)
+        } catch (error) {
+          console.error(error)
+        }
+      }
+
+      async function connectBroker() {
+        const config = brokerConfigFromForm()
+        saveLocalConfig(config)
+        $('#connectButton').disabled = true
+        try {
+          const state = await api('/api/connect', {
+            method: 'POST',
+            body: JSON.stringify(config),
+          })
+          renderConnection(state)
+        } catch (error) {
+          alert('Не удалось подключиться к MQTT брокеру')
+          console.error(error)
+        } finally {
+          $('#connectButton').disabled = false
+        }
+      }
+
+      async function disconnectBroker() {
+        await api('/api/disconnect', { method: 'POST' })
+        await refreshStatus()
+      }
+
+      async function publishSensors() {
+        $('#publishSensorsButton').disabled = true
+        try {
+          await api('/api/sensors', {
+            method: 'POST',
+            body: JSON.stringify({ ...sensorValues, retain: true }),
+          })
+          $('#lastPublishText').textContent = `Отправлено ${formatTime(Date.now())}`
+        } catch (error) {
+          $('#lastPublishText').textContent = 'Ошибка публикации'
+          console.error(error)
+        } finally {
+          $('#publishSensorsButton').disabled = false
+        }
+      }
+
+      async function applyPreset(name) {
+        const preset = presets[name]
+        Object.assign(sensorValues, preset.values)
+        Object.keys(sensorValues).forEach(syncSensorInputs)
+        try {
+          await api('/api/simulator/mode', {
+            method: 'POST',
+            body: JSON.stringify({ mode: preset.mode }),
+          })
+          await publishSensors()
+        } catch (error) {
+          console.error(error)
+        }
+      }
+
+      async function toggleDevice(device) {
+        const enabled = Boolean(brokerState?.devices?.[device])
+        await api('/api/device/control', {
+          method: 'POST',
+          body: JSON.stringify({ device_type: device, state: enabled ? 'OFF' : 'ON' }),
+        })
+        await refreshStatus()
+      }
+
+      async function startDayScenario() {
+        await api('/api/light/day', {
+          method: 'POST',
+          body: JSON.stringify({ duration_ms: 15000, start_delay_ms: 1200 }),
+        })
+        await refreshStatus()
+      }
+
+      function toggleAutoPublish() {
+        const button = $('#autoToggle')
+        const nextEnabled = !button.classList.contains('active')
+        button.classList.toggle('active', nextEnabled)
+        clearInterval(autoTimer)
+        autoTimer = null
+        if (nextEnabled) {
+          publishSensors()
+          autoTimer = setInterval(publishSensors, Math.max(500, Number($('#intervalMs').value) || 2000))
+        }
+      }
+
+      function connectWebSocket() {
+        clearTimeout(wsRetry)
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+        ws = new WebSocket(`${protocol}//${location.host}/api/ws`)
+        $('#wsText').textContent = 'WS connecting'
+
+        ws.onopen = () => {
+          $('#wsText').textContent = 'WS online'
+        }
+        ws.onmessage = (event) => {
+          try {
+            const log = JSON.parse(event.data)
+            if (!logs.some((item) => item.id === log.id)) {
+              logs.push(log)
+              logs = logs.slice(-240)
+              renderLogs()
+            }
+          } catch (error) {
+            console.error(error)
+          }
+        }
+        ws.onclose = () => {
+          $('#wsText').textContent = 'WS retry'
+          wsRetry = setTimeout(connectWebSocket, 1800)
+        }
+        ws.onerror = () => {
+          ws.close()
+        }
+      }
+
+      async function loadInitialLogs() {
+        try {
+          logs = await api('/api/logs?limit=180')
+          renderLogs()
+        } catch (error) {
+          console.error(error)
+        }
+      }
+
+      function bindUi() {
+        $('#connectButton').addEventListener('click', connectBroker)
+        $('#disconnectButton').addEventListener('click', disconnectBroker)
+        $('#publishSensorsButton').addEventListener('click', publishSensors)
+        $('#dayButton').addEventListener('click', startDayScenario)
+        $('#autoToggle').addEventListener('click', toggleAutoPublish)
+        $('#tlsToggle').addEventListener('click', () => {
+          tlsEnabled = !tlsEnabled
+          $('#tlsToggle').classList.toggle('active', tlsEnabled)
+        })
+        $('#clearLogsButton').addEventListener('click', () => {
+          logs = []
+          renderLogs()
+        })
+        $$('.preset').forEach((button) => {
+          button.addEventListener('click', () => applyPreset(button.dataset.preset))
+        })
+        $('#targetId').addEventListener('input', () => renderMachines(brokerState?.devices || {}))
+        $('#intervalMs').addEventListener('change', () => {
+          if ($('#autoToggle').classList.contains('active')) {
+            toggleAutoPublish()
+            toggleAutoPublish()
+          }
+        })
+      }
+
+      async function boot() {
+        bindUi()
+        renderSensors()
+        renderMachines()
+        renderLed()
+        const localConfig = loadLocalConfig()
+        const state = await api('/api/status')
+        applyConfigToForm({ ...state.config, ...localConfig })
+        renderConnection(state)
+        await loadInitialLogs()
+        connectWebSocket()
+        setInterval(refreshStatus, 1000)
+      }
+
+      boot().catch((error) => console.error(error))
+    </script>
+  </body>
+</html>
